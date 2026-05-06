@@ -16,6 +16,7 @@ export type SSECallbacks = {
 	onError?: (event: AgentEvent) => void;
 	onComplete?: (event: AgentEvent) => void;
 	onDownloadReady?: (event: AgentEvent) => void;
+	onPlanReady?: (event: AgentEvent) => void;
 	onMessage?: (message: ChatMessage) => void;
 	onRawEvent?: (event: AgentEvent) => void;
 };
@@ -28,14 +29,18 @@ export class AGUIClient {
 		this.callbacks = callbacks;
 	}
 
-	connect(projectId: string, message: string = '') {
+	connect(projectId: string, contextMode: string = 'auto', mode: string = 'generate', uiMode: string = 'build') {
 		if (this.eventSource) {
 			this.eventSource.close();
 		}
 
-		const url = message
-			? `/api/stream/${projectId}?message=${encodeURIComponent(message)}`
-			: `/api/stream/${projectId}`;
+		const params = new URLSearchParams();
+		if (contextMode) params.set('context_mode', contextMode);
+		if (mode) params.set('mode', mode);
+		if (uiMode) params.set('ui_mode', uiMode);
+
+		const query = params.toString();
+		const url = query ? `/api/stream/${projectId}?${query}` : `/api/stream/${projectId}`;
 		this.eventSource = new EventSource(url);
 
 		this.eventSource.onmessage = (event) => {
@@ -57,66 +62,89 @@ export class AGUIClient {
 	}
 
 	private handleEvent(event: AgentEvent) {
-		this.callbacks.onRawEvent?.(event);
+		const normalizedEvent: AgentEvent = {
+			...event,
+			timestamp:
+				typeof event.timestamp === 'string'
+					? new Date(event.timestamp).getTime()
+					: event.timestamp
+		};
+		this.callbacks.onRawEvent?.(normalizedEvent);
 
-		switch (event.type) {
+		switch (normalizedEvent.type) {
 			case 'lifecycle':
-				this.callbacks.onLifecycle?.(event);
+				this.callbacks.onLifecycle?.(normalizedEvent);
 				break;
 			case 'step':
-				this.callbacks.onStep?.(event);
+				this.callbacks.onStep?.(normalizedEvent);
 				break;
 			case 'text':
-				this.callbacks.onText?.(event);
+				this.callbacks.onText?.(normalizedEvent);
 				this.callbacks.onMessage?.({
 					id: crypto.randomUUID(),
 					role: 'assistant',
-					content: event.content || '',
-					timestamp: event.timestamp || Date.now(),
-					events: [event]
+					content: normalizedEvent.content || '',
+					timestamp: normalizedEvent.timestamp || Date.now(),
+					events: [normalizedEvent]
 				});
 				break;
 			case 'tool_call':
-				this.callbacks.onToolCall?.(event);
+				this.callbacks.onToolCall?.(normalizedEvent);
 				break;
 			case 'tool_result':
-				this.callbacks.onToolResult?.(event);
+				this.callbacks.onToolResult?.(normalizedEvent);
 				break;
 			case 'state':
-				this.callbacks.onState?.(event);
+				this.callbacks.onState?.(normalizedEvent);
 				break;
 			case 'activity':
-				if (event.agent_id && event.agent_name) {
+				if (normalizedEvent.agent_id && normalizedEvent.agent_name) {
 					this.callbacks.onActivity?.({
-						agent_id: event.agent_id,
-						agent_name: event.agent_name,
-						action: event.content || '',
-						timestamp: event.timestamp || Date.now(),
-						status: (event.data?.status as AgentActivity['status']) || 'working'
+						agent_id: normalizedEvent.agent_id,
+						agent_name: normalizedEvent.agent_name,
+						action: normalizedEvent.content || '',
+						timestamp: normalizedEvent.timestamp || Date.now(),
+						status:
+							(normalizedEvent.data?.status as AgentActivity['status']) ||
+							'working'
 					});
 				}
 				break;
 			case 'reasoning':
-				this.callbacks.onReasoning?.(event);
+				this.callbacks.onReasoning?.(normalizedEvent);
 				break;
 			case 'thinking':
-				this.callbacks.onThinking?.(event);
+				this.callbacks.onThinking?.(normalizedEvent);
 				break;
 			case 'progress':
-				this.callbacks.onProgress?.(event.data as unknown as ProjectProgress);
+				this.callbacks.onProgress?.(
+					normalizedEvent.data as unknown as ProjectProgress
+				);
 				break;
 			case 'file_created':
 			case 'file_modified':
-				this.callbacks.onFileCreated?.(event);
+				this.callbacks.onFileCreated?.(normalizedEvent);
 				break;
 			case 'error':
-				this.callbacks.onError?.(event);
+				this.callbacks.onError?.(normalizedEvent);
 				break;
 			case 'complete':
-				this.callbacks.onComplete?.(event);
+				this.callbacks.onComplete?.(normalizedEvent);
 				break;
 			case 'download_ready':
-				this.callbacks.onDownloadReady?.(event);
+				this.callbacks.onDownloadReady?.(normalizedEvent);
+				break;
+			case 'RunFinished':
+				this.callbacks.onComplete?.(normalizedEvent);
+				this.disconnect();
+				break;
+			case 'RunError':
+				this.callbacks.onError?.(normalizedEvent);
+				this.disconnect();
+				break;
+			case 'PlanReady':
+				this.callbacks.onPlanReady?.(normalizedEvent);
+				this.disconnect();
 				break;
 		}
 	}

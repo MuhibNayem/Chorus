@@ -108,6 +108,9 @@ class RedisBlackboard:
             "data": data or {},
             "timestamp": datetime.now().isoformat(),
         }
+        logging.getLogger("blackboard").info(
+            f"[RedisBlackboard] publish project={project_id} agent={agent_name} type={event_type}"
+        )
         await self.publish(channel, message)
 
     async def subscribe_agent_events(

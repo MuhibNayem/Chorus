@@ -5,9 +5,19 @@ const BACKEND = env.BACKEND_URL || 'http://localhost:8000';
 
 export const GET: RequestHandler = async ({ params, url }) => {
 	const projectId = params.project_id;
-	const message = url.searchParams.get('message') || '';
+	const paramsOut = new URLSearchParams();
+	const contextMode = url.searchParams.get('context_mode');
+	const mode = url.searchParams.get('mode');
+	const uiMode = url.searchParams.get('ui_mode');
 
-	const backendUrl = `${BACKEND}/api/stream/${projectId}?message=${encodeURIComponent(message)}`;
+	if (contextMode) paramsOut.set('context_mode', contextMode);
+	if (mode) paramsOut.set('mode', mode);
+	if (uiMode) paramsOut.set('ui_mode', uiMode);
+
+	const query = paramsOut.toString();
+	const backendUrl = query
+		? `${BACKEND}/api/stream/${projectId}?${query}`
+		: `${BACKEND}/api/stream/${projectId}`;
 
 	const response = await fetch(backendUrl, {
 		headers: {

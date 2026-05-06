@@ -5,6 +5,7 @@ GitHub readmes, and other web resources discovered via web_search().
 """
 
 import logging
+import httpx
 from typing import Dict, Any
 from langchain_core.tools import tool
 
@@ -63,7 +64,7 @@ def _is_blocked(url: str) -> bool:
 
 
 @tool("fetch_url")
-def fetch_url(url: str) -> Dict[str, Any]:
+async def fetch_url(url: str) -> Dict[str, Any]:
     """Fetch and extract the main text content from a web page URL.
 
     Use this AFTER web_search() to read full documentation, blog posts,
@@ -80,7 +81,6 @@ def fetch_url(url: str) -> Dict[str, Any]:
         return {"status": "error", "url": url, "error": "This site blocks automated access. Try a different URL from search results."}
 
     try:
-        import requests
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -91,37 +91,38 @@ def fetch_url(url: str) -> Dict[str, Any]:
             "Accept-Language": "en-US,en;q=0.5",
         }
 
-        resp = requests.get(url, headers=headers, timeout=20)
-        resp.raise_for_status()
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
 
-        # Extract title
-        title = ""
-        try:
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(resp.text, "html.parser")
-            title_tag = soup.find("title")
-            if title_tag:
-                title = title_tag.get_text(strip=True)
-        except Exception:
-            pass
+            # Extract title
+            title = ""
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.text, "html.parser")
+                title_tag = soup.find("title")
+                if title_tag:
+                    title = title_tag.get_text(strip=True)
+            except Exception:
+                pass
 
-        content = _extract_main_content(resp.text)
-        logger.info(f"[fetch_url] Fetched {url[:80]} ({len(content)} chars)")
+            content = _extract_main_content(resp.text)
+            logger.info(f"[fetch_url] Fetched {url[:80]} ({len(content)} chars)")
 
-        return {
-            "status": "success",
-            "url": url,
-            "title": title,
-            "content": content,
-            "content_length": len(content),
-        }
+            return {
+                "status": "success",
+                "url": url,
+                "title": title,
+                "content": content,
+                "content_length": len(content),
+            }
 
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         logger.warning(f"[fetch_url] Timeout: {url}")
         return {"status": "error", "url": url, "error": "Timeout fetching URL"}
-    except requests.exceptions.RequestException as e:
-        logger.warning(f"[fetch_url] Request failed: {url} — {e}")
-        return {"status": "error", "url": url, "error": str(e)}
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"[fetch_url] HTTP error: {url} — {e}")
+        return {"status": "error", "url": url, "error": f"HTTP {e.response.status_code}"}
     except Exception as e:
         logger.error(f"[fetch_url] Unexpected error: {url} — {e}")
         return {"status": "error", "url": url, "error": str(e)}

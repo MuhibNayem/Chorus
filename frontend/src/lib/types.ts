@@ -13,6 +13,8 @@ export type AgentEventType =
 	| 'lifecycle'
 	| 'step'
 	| 'text'
+	| 'context_built'
+	| 'context_compacted'
 	| 'tool_call'
 	| 'tool_result'
 	| 'tool_start'
@@ -30,7 +32,8 @@ export type AgentEventType =
 	| 'retry'
 	| 'RunStarted'
 	| 'RunFinished'
-	| 'RunError';
+	| 'RunError'
+	| 'PlanReady';
 
 export interface AgentEvent {
 	type: AgentEventType;
@@ -46,6 +49,7 @@ export interface ChatMessage {
 	role: 'user' | 'assistant';
 	content: string;
 	timestamp: number;
+	metadata?: Record<string, any>;
 	events?: AgentEvent[];
 }
 

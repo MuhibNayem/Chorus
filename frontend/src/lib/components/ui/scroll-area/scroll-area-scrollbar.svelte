@@ -6,7 +6,6 @@
 		ref = $bindable(null),
 		class: className,
 		orientation = "vertical",
-		children,
 		...restProps
 	}: WithoutChild<ScrollAreaPrimitive.ScrollbarProps> = $props();
 </script>
@@ -22,7 +21,6 @@
 	)}
 	{...restProps}
 >
-	{@render children?.()}
 	<ScrollAreaPrimitive.Thumb
 		data-slot="scroll-area-thumb"
 		class="rounded-full bg-border relative flex-1"

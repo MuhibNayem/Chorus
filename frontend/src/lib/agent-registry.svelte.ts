@@ -2,6 +2,8 @@ import type { AgentEvent, AgentStatus, TodoItem } from '$lib/types';
 
 export type AgentEventType =
 	| 'thinking'
+	| 'context_built'
+	| 'context_compacted'
 	| 'text'
 	| 'tool_start'
 	| 'tool_call'
@@ -21,7 +23,8 @@ export type AgentEventType =
 	| 'reasoning'
 	| 'RunStarted'
 	| 'RunFinished'
-	| 'RunError';
+	| 'RunError'
+	| 'PlanReady';
 
 export interface AgentStreamEvent {
 	id: string;
@@ -127,7 +130,7 @@ class AgentRegistry {
 	selectedAgentId = $state<string | null>(null);
 	globalProgress = $state<{ percent: number; phase: string; message: string } | null>(null);
 	downloadReady = $state(false);
-	downloadData = $state<{ zip_url: string; docker_url: string; project_name: string; project_id: string } | null>(null);
+	downloadData = $state<{ zip_url: string; download_url?: string; project_name: string; project_id: string } | null>(null);
 	isRunning = $state(false);
 	hasError = $state(false);
 	errorMessage = $state('');
@@ -283,8 +286,9 @@ class AgentRegistry {
 				this.downloadReady = true;
 				this.downloadData = event.data as {
 					zip_url: string;
-					docker_url: string;
+					download_url?: string;
 					project_name: string;
+					project_id: string;
 				};
 				this.isRunning = false;
 				break;

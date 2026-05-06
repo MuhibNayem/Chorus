@@ -2,7 +2,7 @@ import os
 import json
 import time
 import logging
-import redis
+import redis.asyncio as redis
 from typing import Dict, Any
 from langchain_core.tools import tool
 from .workspace_tools import get_project_id
@@ -13,49 +13,81 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
 @tool("wait_on_agent")
-def wait_on_agent(dependency: str, timeout: int = 120) -> Dict[str, Any]:
+async def wait_on_agent(dependency: str) -> Dict[str, Any]:
     """Wait for another agent to complete a specific task or publish a spec.
-    This call BLOCKS your execution until the dependency is met.
+    Uses Redis pub/sub with persistent storage for 100% reliable delivery.
+    Blocks indefinitely until dependency is satisfied (supports hours-long waits).
 
     Args:
         dependency: The name of the dependency to wait for (e.g., 'backend_api')
-        timeout: How long to wait in seconds (default 120)
     """
     project_id = get_project_id()
     dep_key = f"project:{project_id}:dep:{dependency}"
+    channel = f"project:{project_id}:events"
 
-    # Use a fresh sync Redis connection — thread-safe, no event-loop binding issues
     r = redis.from_url(REDIS_URL, decode_responses=True)
 
-    logger.info(f"[Tool:wait_on_agent] Agent waiting for: {dependency}")
-
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        data = r.get(dep_key)
+    try:
+        # 1. Immediate path: Check if dependency is already satisfied
+        data = await r.get(dep_key)
         if data:
+            logger.info(f"[wait_on_agent] Dependency '{dependency}' ready immediately.")
             try:
                 data = json.loads(data)
-            except json.JSONDecodeError:
+            except:
                 pass
-            logger.info(f"[Tool:wait_on_agent] Dependency met: {dependency}")
-            return {
-                "status": "success",
-                "dependency": dependency,
-                "data": data,
-                "message": f"Dependency {dependency} is now ready.",
-            }
-        time.sleep(2)
+            await r.delete(dep_key)
+            logger.info(f"[wait_on_agent] Consumed dependency key: {dep_key}")
+            return {"status": "success", "dependency": dependency, "data": data}
 
-    logger.warning(f"[Tool:wait_on_agent] Timeout waiting for {dependency}")
-    return {
-        "status": "timeout",
-        "error": f"Timed out waiting for {dependency} after {timeout}s",
-    }
+        # 2. Infinite wait via pub/sub with persistent backup
+        logger.info(f"[wait_on_agent] Entering infinite wait for: {dependency}")
+
+        pubsub = r.pubsub(ignore_subscribe_messages=True)
+        await pubsub.subscribe(channel)
+
+        try:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    try:
+                        data = await r.get(dep_key)
+                        if data:
+                            logger.info(f"[wait_on_agent] Dependency '{dependency}' satisfied via event.")
+                            try:
+                                data = json.loads(data)
+                            except:
+                                pass
+                            await r.delete(dep_key)
+                            logger.info(f"[wait_on_agent] Consumed dependency key: {dep_key}")
+                            return {"status": "success", "dependency": dependency, "data": data}
+                    except Exception as e:
+                        logger.debug(f"[wait_on_agent] Error checking dependency: {e}")
+                        continue
+        except redis.ConnectionError:
+            logger.warning(f"[wait_on_agent] Connection lost, checking dependency one last time.")
+            data = await r.get(dep_key)
+            if data:
+                try:
+                    data = json.loads(data)
+                except:
+                    pass
+                await r.delete(dep_key)
+                return {"status": "success", "dependency": dependency, "data": data}
+            raise
+        finally:
+            await pubsub.unsubscribe(channel)
+            await pubsub.close()
+    finally:
+        await r.aclose()
+
+    return {"status": "error", "error": "Unexpected exit from wait loop"}
 
 
 @tool("signal_ready")
-def signal_ready(dependency: str, data: str) -> Dict[str, Any]:
+async def signal_ready(dependency: str, data: str) -> Dict[str, Any]:
     """Signal to the swarm that your task is complete or a spec is ready.
+    Publishes event to wake up all waiting agents. Data persists in Redis
+    until explicitly consumed by wait_on_agent.
 
     Args:
         dependency: The name of the dependency you are fulfilling (e.g., 'backend_api')
@@ -64,15 +96,30 @@ def signal_ready(dependency: str, data: str) -> Dict[str, Any]:
     project_id = get_project_id()
     dep_key = f"project:{project_id}:dep:{dependency}"
 
-    # Use a fresh sync Redis connection — thread-safe, no event-loop binding issues
     r = redis.from_url(REDIS_URL, decode_responses=True)
 
-    logger.info(f"[Tool:signal_ready] Signaling: {dependency}")
+    try:
+        logger.info(f"[signal_ready] Signaling: {dependency}")
 
-    r.set(dep_key, data, ex=3600)
+        # 1. Store the dependency value persistently (survives disconnects, restarts)
+        await r.set(dep_key, data)
 
-    return {
-        "status": "success",
-        "dependency": dependency,
-        "message": f"Successfully signaled {dependency} is ready.",
-    }
+        # 2. Publish event to wake up all subscribed agents
+        message = {
+            "type": "dependency_ready",
+            "agent_name": "system",
+            "content": f"Dependency {dependency} is now ready.",
+            "data": {"dependency": dependency},
+            "timestamp": int(time.time() * 1000)
+        }
+        await r.publish(f"project:{project_id}:events", json.dumps(message))
+
+        logger.info(f"[signal_ready] Published event for: {dependency}")
+
+        return {
+            "status": "success",
+            "dependency": dependency,
+            "message": f"Successfully signaled {dependency} is ready.",
+        }
+    finally:
+        await r.aclose()

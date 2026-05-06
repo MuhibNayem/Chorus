@@ -11,7 +11,7 @@ from contextvars import ContextVar
 
 logger = logging.getLogger("tools")
 
-WORKSPACE_BASE = "/tmp/deepseek/workspaces"
+WORKSPACE_BASE = Path(os.getenv("WORKSPACE_BASE", "/tmp/deepseek/workspaces"))
 WORKSPACE_MAX_AGE_HOURS = int(os.environ.get("WORKSPACE_MAX_AGE_HOURS", "24"))
 
 # Thread-safe project context
@@ -33,9 +33,9 @@ def _validate_workspace_path(workspace: Path, relative_path: str) -> Path:
     return full_path
 
 
-def cleanup_old_workspaces():
+def cleanup_old_workspaces(preserve_project_id: Optional[str] = None):
     """Delete workspace directories older than WORKSPACE_MAX_AGE_HOURS."""
-    base = Path(WORKSPACE_BASE)
+    base = WORKSPACE_BASE
     if not base.exists():
         return
 
@@ -44,6 +44,8 @@ def cleanup_old_workspaces():
 
     for entry in base.iterdir():
         if not entry.is_dir():
+            continue
+        if preserve_project_id and entry.name == preserve_project_id:
             continue
         try:
             mtime = datetime.fromtimestamp(entry.stat().st_mtime)
@@ -80,14 +82,14 @@ def get_project_id() -> str:
 
 
 def get_workspace() -> Path:
-    workspace = Path(WORKSPACE_BASE) / get_project_id()
+    workspace = WORKSPACE_BASE / get_project_id()
     workspace.mkdir(parents=True, exist_ok=True)
     return workspace
 
 
 def get_storage():
     """Get MinIO storage instance."""
-    from src.storage.minio_client import MinioStorage
+    from ...storage.minio_client import MinioStorage
     return MinioStorage()
 
 
@@ -122,7 +124,7 @@ def create_project_zip() -> Dict[str, Any]:
 
 
 @tool("upload_project_to_storage")
-def upload_project_to_storage() -> Dict[str, Any]:
+async def upload_project_to_storage() -> Dict[str, Any]:
     """Upload the project ZIP to MinIO storage.
 
     Returns:
@@ -136,17 +138,17 @@ def upload_project_to_storage() -> Dict[str, Any]:
             return {"status": "error", "error": "ZIP file not found. Run create_project_zip first."}
 
         storage = get_storage()
-        _run_async(storage.connect())
+        await storage.connect()
 
         object_name = f"projects/{get_project_id()}/{get_project_id()}.zip"
-        result = _run_async(storage.upload_file(
+        result = await storage.upload_file(
             object_name,
             zip_path,
             content_type="application/zip",
-        ))
+        )
 
         if result.get("status") == "success":
-            url = _run_async(storage.get_presigned_url(object_name, expires_seconds=3600))
+            url = await storage.get_presigned_url(object_name, expires_seconds=3600)
             logger.info(f"[upload_project_to_storage] Uploaded, URL: {url[:50]}...")
 
             return {
@@ -166,7 +168,7 @@ def upload_project_to_storage() -> Dict[str, Any]:
 
 
 @tool("get_project_download_url")
-def get_project_download_url(expires_seconds: int = 3600) -> Dict[str, Any]:
+async def get_project_download_url(expires_seconds: int = 3600) -> Dict[str, Any]:
     """Get a presigned URL to download the project ZIP from MinIO.
 
     Args:
@@ -174,14 +176,14 @@ def get_project_download_url(expires_seconds: int = 3600) -> Dict[str, Any]:
     """
     try:
         storage = get_storage()
-        _run_async(storage.connect())
+        await storage.connect()
 
         object_name = f"projects/{get_project_id()}/{get_project_id()}.zip"
 
-        if not _run_async(storage.object_exists(object_name)):
+        if not await storage.object_exists(object_name):
             return {"status": "error", "error": "Project not found in storage. Run upload_project_to_storage first."}
 
-        url = _run_async(storage.get_presigned_url(object_name, expires_seconds))
+        url = await storage.get_presigned_url(object_name, expires_seconds)
         logger.info(f"[get_project_download_url] Generated URL: {url[:50]}...")
 
         return {
@@ -195,7 +197,7 @@ def get_project_download_url(expires_seconds: int = 3600) -> Dict[str, Any]:
 
 
 @tool("build_docker_image")
-def build_docker_image(project_name: str) -> Dict[str, Any]:
+async def build_docker_image(project_name: str) -> Dict[str, Any]:
     """Build a Docker image for the project.
 
     Args:
@@ -204,7 +206,6 @@ def build_docker_image(project_name: str) -> Dict[str, Any]:
     Returns:
         Status and image name/tag
     """
-    import subprocess
     try:
         workspace = get_workspace()
         backend_path = workspace / project_name
@@ -214,26 +215,31 @@ def build_docker_image(project_name: str) -> Dict[str, Any]:
 
         image_name = f"deepseek-{project_name}:latest"
 
-        result = subprocess.run(
-            ["docker", "build", "-t", image_name, "-f", str(backend_path / "Dockerfile"), str(backend_path)],
-            capture_output=True,
-            text=True,
-            timeout=300,
+        # Use asyncio.create_subprocess_exec for async execution
+        process = await asyncio.create_subprocess_exec(
+            "docker", "build", "-t", image_name, "-f", str(backend_path / "Dockerfile"), str(backend_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
 
-        if result.returncode == 0:
-            logger.info(f"[build_docker_image] Built {image_name}")
-            return {
-                "status": "success",
-                "image_name": image_name,
-                "message": "Docker image built successfully",
-            }
-        else:
-            logger.error(f"[build_docker_image] Failed: {result.stderr}")
-            return {"status": "error", "error": result.stderr}
-    except subprocess.TimeoutExpired:
-        logger.error("[build_docker_image] Timeout during docker build")
-        return {"status": "error", "error": "Docker build timed out"}
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+            if process.returncode == 0:
+                logger.info(f"[build_docker_image] Built {image_name}")
+                return {
+                    "status": "success",
+                    "image_name": image_name,
+                    "message": "Docker image built successfully",
+                }
+            else:
+                err_msg = stderr.decode()
+                logger.error(f"[build_docker_image] Failed: {err_msg}")
+                return {"status": "error", "error": err_msg}
+        except asyncio.TimeoutError:
+            process.kill()
+            logger.error("[build_docker_image] Timeout during docker build")
+            return {"status": "error", "error": "Docker build timed out"}
+
     except FileNotFoundError:
         logger.error("[build_docker_image] Docker not found")
         return {"status": "error", "error": "Docker not installed or not in PATH"}
@@ -243,7 +249,7 @@ def build_docker_image(project_name: str) -> Dict[str, Any]:
 
 
 @tool("run_docker_container")
-def run_docker_container(image_name: str, port: int = 8080) -> Dict[str, Any]:
+async def run_docker_container(image_name: str, port: int = 8080) -> Dict[str, Any]:
     """Run a Docker container from the built image.
 
     Args:
@@ -253,14 +259,14 @@ def run_docker_container(image_name: str, port: int = 8080) -> Dict[str, Any]:
     Returns:
         Container ID and status
     """
-    import subprocess
     try:
-        container_id = subprocess.run(
-            ["docker", "run", "-d", "-p", f"{port}:8080", "--name", f"deepseek-{image_name.replace(':', '-')}", image_name],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout.strip()
+        process = await asyncio.create_subprocess_exec(
+            "docker", "run", "-d", "-p", f"{port}:8080", "--name", f"deepseek-{image_name.replace(':', '-')}", image_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        container_id = stdout.decode().strip()
 
         if container_id:
             logger.info(f"[run_docker_container] Started {container_id}")
@@ -270,14 +276,16 @@ def run_docker_container(image_name: str, port: int = 8080) -> Dict[str, Any]:
                 "port": port,
             }
         else:
-            return {"status": "error", "error": "Failed to start container"}
+            err_msg = stderr.decode()
+            logger.error(f"[run_docker_container] Failed: {err_msg}")
+            return {"status": "error", "error": err_msg or "Failed to start container"}
     except Exception as e:
         logger.error(f"[run_docker_container] Failed: {e}")
         return {"status": "error", "error": str(e)}
 
 
 @tool("write_file")
-def write_file(file_path: str, content: str) -> Dict[str, Any]:
+async def write_file(file_path: str, content: str) -> Dict[str, Any]:
     """Write content to a file in the project workspace.
 
     Args:
@@ -288,6 +296,7 @@ def write_file(file_path: str, content: str) -> Dict[str, Any]:
         workspace = get_workspace()
         full_path = _validate_workspace_path(workspace, file_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
+        # For small file writes, we can stay sync or use to_thread
         full_path.write_text(content)
         logger.info(f"[write_file] Created: {file_path}")
         return {
@@ -304,7 +313,7 @@ def write_file(file_path: str, content: str) -> Dict[str, Any]:
 
 
 @tool("read_file")
-def read_file(file_path: str) -> Dict[str, Any]:
+async def read_file(file_path: str) -> Dict[str, Any]:
     """Read content from a file in the project workspace.
 
     Args:
@@ -331,7 +340,7 @@ def read_file(file_path: str) -> Dict[str, Any]:
 
 
 @tool("list_files")
-def list_files(directory: str = "") -> Dict[str, Any]:
+async def list_files(directory: str = "") -> Dict[str, Any]:
     """List all files in a directory recursively.
 
     Args:
@@ -364,7 +373,7 @@ def list_files(directory: str = "") -> Dict[str, Any]:
 
 
 @tool("execute_command")
-def execute_command(command: str, timeout: int = 60) -> Dict[str, Any]:
+async def execute_command(command: str, timeout: int = 60) -> Dict[str, Any]:
     """Execute a shell command in the project workspace (sandboxed via bubblewrap).
 
     Args:
@@ -377,7 +386,7 @@ def execute_command(command: str, timeout: int = 60) -> Dict[str, Any]:
 
         from .sandbox import Sandbox
         sandbox = Sandbox(workspace)
-        result = sandbox.execute(command, timeout)
+        result = await sandbox.execute(command, timeout)
 
         # Truncate stdout/stderr to avoid flooding the LLM context
         if result.get("status") == "success" or result.get("status") == "failed":
@@ -391,7 +400,7 @@ def execute_command(command: str, timeout: int = 60) -> Dict[str, Any]:
 
 
 @tool("create_directory")
-def create_directory(directory: str) -> Dict[str, Any]:
+async def create_directory(directory: str) -> Dict[str, Any]:
     """Create a directory in the project workspace.
 
     Args:
@@ -412,7 +421,7 @@ def create_directory(directory: str) -> Dict[str, Any]:
 
 
 @tool("delete_file")
-def delete_file(file_path: str) -> Dict[str, Any]:
+async def delete_file(file_path: str) -> Dict[str, Any]:
     """Delete a file from the project workspace.
 
     Args:

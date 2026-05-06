@@ -18,17 +18,17 @@ class Sandbox:
         self.system = platform.system()
         self.workspace_path.mkdir(parents=True, exist_ok=True)
 
-    def execute(self, command: str, timeout: int = 300) -> Dict[str, Any]:
+    async def execute(self, command: str, timeout: int = 300) -> Dict[str, Any]:
         """Execute a command within the sandbox."""
         if self.system == "Linux":
-            return self._execute_bwrap(command, timeout)
+            return await self._execute_bwrap(command, timeout)
         elif self.system == "Darwin":
-            return self._execute_seatbelt(command, timeout)
+            return await self._execute_seatbelt(command, timeout)
         else:
             # Fallback for other systems
-            return self._execute_fallback(command, timeout)
+            return await self._execute_fallback(command, timeout)
 
-    def _execute_bwrap(self, command: str, timeout: int) -> Dict[str, Any]:
+    async def _execute_bwrap(self, command: str, timeout: int) -> Dict[str, Any]:
         """Execute using bubblewrap on Linux."""
         bwrap_cmd = [
             "bwrap",
@@ -57,16 +57,16 @@ class Sandbox:
                 raise Exception("bwrap not functional")
             
             logger.info(f"[Sandbox] Running bwrap: {command}")
-            res = self._run_subprocess(bwrap_cmd, timeout)
+            res = await self._run_subprocess(bwrap_cmd, timeout)
             if "Permission denied" in res.get("stderr", "") and "uid map" in res.get("stderr", ""):
                 logger.warning("[Sandbox] bwrap failed with permission error, falling back to direct execution")
-                return self._execute_fallback(command, timeout)
+                return await self._execute_fallback(command, timeout)
             return res
         except Exception as e:
             logger.warning(f"[Sandbox] bwrap failed ({e}), falling back to direct execution")
-            return self._execute_fallback(command, timeout)
+            return await self._execute_fallback(command, timeout)
 
-    def _execute_seatbelt(self, command: str, timeout: int) -> Dict[str, Any]:
+    async def _execute_seatbelt(self, command: str, timeout: int) -> Dict[str, Any]:
         """Execute using sandbox-exec on macOS."""
         # This is a simplified profile
         profile = f"""
@@ -90,28 +90,30 @@ class Sandbox:
         ]
         
         logger.info(f"[Sandbox] Running seatbelt: {command}")
-        return self._run_subprocess(seatbelt_cmd, timeout)
+        return await self._run_subprocess(seatbelt_cmd, timeout)
 
-    def _execute_fallback(self, command: str, timeout: int) -> Dict[str, Any]:
+    async def _execute_fallback(self, command: str, timeout: int) -> Dict[str, Any]:
         """Fallback execution without sandbox."""
         logger.warning(f"[Sandbox] No supported sandbox for {self.system}, falling back to direct execution")
-        return self._run_subprocess(["bash", "-c", f"cd {self.workspace_path} && {command}"], timeout)
+        return await self._run_subprocess(["bash", "-c", f"cd {self.workspace_path} && {command}"], timeout)
 
-    def _run_subprocess(self, cmd_list: List[str], timeout: int) -> Dict[str, Any]:
+    async def _run_subprocess(self, cmd_list: List[str], timeout: int) -> Dict[str, Any]:
         try:
-            result = subprocess.run(
-                cmd_list,
-                capture_output=True,
-                text=True,
-                timeout=timeout
+            process = await asyncio.create_subprocess_exec(
+                *cmd_list,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            return {
-                "status": "success" if result.returncode == 0 else "failed",
-                "returncode": result.returncode,
-                "stdout": result.stdout,
-                "stderr": result.stderr
-            }
-        except subprocess.TimeoutExpired:
-            return {"status": "error", "error": "Timeout exceeded"}
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+                return {
+                    "status": "success" if process.returncode == 0 else "failed",
+                    "returncode": process.returncode,
+                    "stdout": stdout.decode(errors="replace"),
+                    "stderr": stderr.decode(errors="replace")
+                }
+            except asyncio.TimeoutError:
+                process.kill()
+                return {"status": "error", "error": "Timeout exceeded"}
         except Exception as e:
             return {"status": "error", "error": str(e)}

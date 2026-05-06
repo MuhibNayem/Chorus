@@ -115,44 +115,49 @@
 
 			<!-- Dynamic Todo List -->
 			{#if agent.tasks.length > 0}
-				<div class="space-y-1.5">
+				<div class="space-y-2 pt-1">
 					<div class="flex items-center justify-between">
-						<span class="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">Tasks</span>
-						<span class="text-[10px] font-mono text-muted-foreground/50">{agent.progress.percent}%</span>
-					</div>
-					{#each agent.tasks as todo, i (i)}
-						<div class="flex items-start gap-2 rounded-md px-2 py-1 transition-all duration-300 {
-							todo.status === 'completed' ? 'bg-emerald-50/50 border border-emerald-100' :
-							todo.status === 'in_progress' ? 'bg-amber-50/50 border border-amber-100' :
-							'bg-slate-50/40 border border-transparent'
-						}">
-							<span class="mt-0.5 text-xs leading-none shrink-0 {
-								todo.status === 'completed' ? 'text-emerald-500' :
-								todo.status === 'in_progress' ? 'text-amber-500 animate-pulse' :
-								'text-slate-400'
-							}">
-								{#if todo.status === 'completed'}
-									✓
-								{:else if todo.status === 'in_progress'}
-									◉
-								{:else}
-									○
-								{/if}
-							</span>
-							<span class="text-[11px] leading-relaxed {
-								todo.status === 'completed' ? 'text-emerald-700 line-through opacity-70' :
-								todo.status === 'in_progress' ? 'text-amber-700 font-medium' :
-								'text-muted-foreground'
-							}">
-								{todo.name}
+						<div class="flex items-center gap-1.5">
+							<Badge variant="secondary" class="h-4 px-1 text-[8px] font-bold uppercase tracking-tighter bg-primary/10 text-primary border-none">
+								Plan
+							</Badge>
+							<span class="text-[10px] font-bold text-foreground/60">
+								{agent.progress.completed}/{agent.progress.total} Tasks
 							</span>
 						</div>
-					{/each}
-					<div class="h-1 w-full overflow-hidden rounded-full bg-muted/60 mt-1">
+						<span class="text-[10px] font-bold text-primary">{agent.progress.percent}%</span>
+					</div>
+					
+					<!-- Progress Bar -->
+					<div class="h-1.5 w-full overflow-hidden rounded-full bg-black/5">
 						<div
-							class="h-full rounded-full transition-all duration-500 {agent.status === 'complete' ? 'bg-emerald-400' : agent.status === 'error' ? 'bg-rose-400' : 'bg-primary/60'}"
+							class="h-full rounded-full transition-all duration-500 ease-out {agent.status === 'complete' ? 'bg-emerald-400' : agent.status === 'error' ? 'bg-rose-400' : 'bg-primary'}"
 							style="width: {agent.progress.percent}%"
 						></div>
+					</div>
+
+					<div class="space-y-1 mt-2 max-h-[120px] overflow-hidden relative">
+						{#each agent.tasks.slice(0, 4) as todo, i (i)}
+							<div class="flex items-start gap-2 px-1 py-0.5">
+								<span class="mt-1 h-1.5 w-1.5 rounded-full shrink-0 {
+									todo.status === 'completed' ? 'bg-emerald-400' :
+									todo.status === 'in_progress' ? 'bg-amber-400 animate-pulse' :
+									'bg-slate-300'
+								}"></span>
+								<span class="text-[11px] leading-tight truncate {
+									todo.status === 'completed' ? 'text-muted-foreground/50 line-through' :
+									todo.status === 'in_progress' ? 'text-foreground font-medium' :
+									'text-muted-foreground/70'
+								}">
+									{todo.name}
+								</span>
+							</div>
+						{/each}
+						{#if agent.tasks.length > 4}
+							<div class="absolute bottom-0 inset-x-0 h-6 bg-gradient-to-t {agentTheme.cardBg} flex items-end justify-center">
+								<span class="text-[9px] font-bold text-muted-foreground/40">+{agent.tasks.length - 4} more</span>
+							</div>
+						{/if}
 					</div>
 				</div>
 			{:else if agent.status !== 'idle'}

@@ -7,14 +7,21 @@
 		projectName = 'project',
 		projectId = '',
 		zipUrl = '',
-		dockerUrl = ''
-	}: { projectName?: string; projectId?: string; zipUrl?: string; dockerUrl?: string } = $props();
+		downloadUrl = ''
+	}: { projectName?: string; projectId?: string; zipUrl?: string; downloadUrl?: string } = $props();
 
 	let isDownloading = $state(false);
 	let downloadError = $state('');
 	let isRegenerating = $state(false);
-	let currentZipUrl = $state(zipUrl);
-	let currentDockerUrl = $state(dockerUrl);
+	let currentZipUrl = $state('');
+	let currentDownloadUrl = $state('');
+
+	$effect(() => {
+		currentZipUrl = zipUrl;
+		if (downloadUrl) {
+			currentDownloadUrl = downloadUrl;
+		}
+	});
 
 	async function downloadZip() {
 		if (!currentZipUrl) return;
@@ -60,7 +67,7 @@
 				currentZipUrl = data.zip_url;
 			}
 			if (data.download_url) {
-				currentDockerUrl = data.download_url;
+				currentDownloadUrl = data.download_url;
 			}
 		} catch (err: any) {
 			downloadError = err.message || 'Failed to regenerate download link.';
@@ -69,9 +76,15 @@
 		}
 	}
 
-	function openDockerUrl() {
-		if (currentDockerUrl) {
-			window.open(currentDockerUrl, '_blank');
+	async function openShareableUrl() {
+		if (!projectId && !currentDownloadUrl) return;
+
+		if (!currentDownloadUrl && projectId) {
+			await regenerateUrl();
+		}
+
+		if (currentDownloadUrl) {
+			window.open(currentDownloadUrl, '_blank', 'noopener,noreferrer');
 		}
 	}
 </script>
@@ -104,12 +117,12 @@
 			</Button>
 			<Button
 				variant="outline"
-				onclick={openDockerUrl}
-				disabled={!currentDockerUrl}
+				onclick={openShareableUrl}
+				disabled={!projectId && !currentDownloadUrl}
 				class="flex-1 h-12 rounded-2xl border-emerald-300 text-emerald-700 hover:bg-emerald-50 transition-all hover:scale-[1.02] disabled:opacity-60"
 			>
 				<Play class="mr-2 h-5 w-5" />
-				Run with Docker
+				Open Shareable Link
 			</Button>
 		</div>
 
