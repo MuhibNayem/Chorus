@@ -3,7 +3,8 @@
 	import type { ChatMessage } from '$lib/types';
 	import { Badge } from '$lib/components/ui/badge';
 	import MarkdownContent from './MarkdownContent.svelte';
-	import { Sparkles, UserRound } from 'lucide-svelte';
+	import Sparkles from '@lucide/svelte/icons/sparkles';
+	import UserRound from '@lucide/svelte/icons/user-round';
 
 	let { message }: { message: ChatMessage } = $props();
 

@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { AgentStream } from '$lib/agent-registry.svelte';
-	import { Loader2, CheckCircle2, AlertCircle } from 'lucide-svelte';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
+	import AlertCircle from '@lucide/svelte/icons/alert-circle';
 	import { Card, CardContent } from '$lib/components/ui/card';
 
 	let {
@@ -21,8 +23,7 @@
 			completed: a.progress.completed,
 			total: a.progress.total,
 			status: a.status,
-			hasDynamicTodos: a.hasDynamicTodos,
-			toolCallCount: a.toolCallCount
+			hasDynamicTodos: a.hasDynamicTodos
 		}))
 	);
 
@@ -112,8 +113,8 @@
 							<span class="text-[9px] font-medium text-muted-foreground/60 uppercase tracking-wider">
 								{#if ap.hasDynamicTodos && ap.total > 0}
 									{ap.completed}/{ap.total} Tasks
-								{:else if ap.toolCallCount > 0}
-									{ap.toolCallCount} Tools
+								{:else if ap.total > 0}
+									{ap.completed}/{ap.total} Steps
 								{:else if ap.status === 'idle'}
 									Waiting
 								{:else}

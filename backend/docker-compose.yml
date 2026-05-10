@@ -3,6 +3,8 @@ services:
     image: pgvector/pgvector:pg17
     container_name: deepseek-postgres
     restart: unless-stopped
+    env_file:
+      - .env.docker
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-deepseek}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -44,11 +46,20 @@ services:
       - "${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
-      interval: 10s
-      timeout: 5s
-      retries: 10
+
+  verification-images:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: deepseek-verification-images
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file:
+      - .env.docker
+    command: [ "/bin/sh", "/app/backend/scripts/pull-images.sh" ]
+    restart: "no"
+    depends_on:
+      - minio
 
   backend-api:
     build:
@@ -67,16 +78,20 @@ services:
       CHECKPOINT_BASE: ${CHECKPOINT_BASE:-/tmp/deepseek/checkpoints}
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       minio:
         condition: service_started
+      verification-images:
+        condition: service_completed_successfully
     ports:
       - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - workspace_data:/tmp/deepseek/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
     tmpfs:
-      - /tmp/deepseek/workspaces:mode=1777,size=1g
-      - /tmp/deepseek/checkpoints:mode=1777,size=256m
+      - /tmp/deepseek/checkpoints:mode=1777,size=1g
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -103,16 +118,18 @@ services:
       CHECKPOINT_BASE: ${CHECKPOINT_BASE:-/tmp/deepseek/checkpoints}
     depends_on:
       postgres:
-        condition: service_started
+        condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       minio:
         condition: service_started
-      backend-api:
-        condition: service_started
+      verification-images:
+        condition: service_completed_successfully
+    volumes:
+      - workspace_data:/tmp/deepseek/workspaces
+      - /var/run/docker.sock:/var/run/docker.sock
     tmpfs:
-      - /tmp/deepseek/workspaces:mode=1777,size=1g
-      - /tmp/deepseek/checkpoints:mode=1777,size=256m
+      - /tmp/deepseek/checkpoints:mode=1777,size=1g
     extra_hosts:
       - "host.docker.internal:host-gateway"
     command: [ "celery", "-A", "src.worker.app", "worker", "--loglevel=info" ]
@@ -121,3 +138,4 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  workspace_data:

@@ -1,7 +1,12 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent } from '$lib/components/ui/card';
-	import { FileArchive, Play, CheckCircle2, AlertTriangle, RefreshCw, Download } from 'lucide-svelte';
+	import FileArchive from '@lucide/svelte/icons/file-archive';
+	import Play from '@lucide/svelte/icons/play';
+	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
+	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import Download from '@lucide/svelte/icons/download';
 
 	let {
 		projectName = 'project',

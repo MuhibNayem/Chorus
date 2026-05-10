@@ -1,4 +1,4 @@
-export type AgentStatus = 'idle' | 'working' | 'thinking' | 'complete' | 'error';
+export type AgentStatus = 'idle' | 'working' | 'thinking' | 'complete' | 'error' | 'paused' | 'stopped';
 
 export interface AgentState {
 	id: string;
@@ -9,10 +9,23 @@ export interface AgentState {
 	isExpanded: boolean;
 }
 
+export type ClaimStatus = 'claimed' | 'valid' | 'invalid' | 'stale' | 'revoked';
+
+export interface ClaimInfo {
+	claim_id: string;
+	claim_type: string;
+	claim_status: ClaimStatus;
+	producer_agent: string;
+	evidence_files?: string[];
+	validation_errors?: string[];
+	updated_at?: number;
+}
+
 export type AgentEventType =
 	| 'lifecycle'
 	| 'step'
 	| 'text'
+	| 'question'
 	| 'context_built'
 	| 'context_compacted'
 	| 'tool_call'
@@ -26,14 +39,36 @@ export type AgentEventType =
 	| 'progress'
 	| 'file_created'
 	| 'file_modified'
+	| 'directory_created'
 	| 'error'
+	| 'warning'
 	| 'complete'
 	| 'download_ready'
 	| 'retry'
 	| 'RunStarted'
 	| 'RunFinished'
 	| 'RunError'
-	| 'PlanReady';
+	| 'PlanReady'
+	// Claim protocol telemetry events (Phase 8)
+	| 'claim_validated'
+	| 'claim_invalid'
+	| 'claim_stale'
+	| 'claim_recovered'
+	| 'verification_failed'
+	| 'quarantined'
+	| 'recovery_rollback'
+	| 'checkpoint'
+	| 'checkpoint_before_retry'
+	| 'checkpoint_on_error'
+  | 'agent_paused'
+  | 'agent_resumed'
+  | 'agent_stopped'
+  | 'stopped'
+  | 'swarm_stop_requested'
+  | 'directive_received'
+  | 'directive_queued'
+  | 'pause_requested'
+  | 'resume_requested';
 
 export interface AgentEvent {
 	type: AgentEventType;

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { AgentStatus } from '$lib/types';
-	import { cn } from '$lib/utils';
 
 	let { status, size = 'md' }: { status: AgentStatus; size?: 'sm' | 'md' | 'lg' } = $props();
 
@@ -19,7 +18,11 @@
 					? { color: 'bg-emerald-400', glow: 'shadow-emerald-400/50', animate: '', label: 'Complete' }
 					: status === 'error'
 						? { color: 'bg-rose-400', glow: 'shadow-rose-400/50', animate: 'animate-pulse', label: 'Error' }
-						: { color: 'bg-slate-400', glow: 'shadow-slate-400/50', animate: '', label: 'Idle' }
+						: status === 'paused'
+							? { color: 'bg-amber-500', glow: 'shadow-amber-500/50', animate: 'animate-pulse', label: 'Paused' }
+							: status === 'stopped'
+								? { color: 'bg-slate-400', glow: 'shadow-slate-400/50', animate: '', label: 'Stopped' }
+								: { color: 'bg-slate-400', glow: 'shadow-slate-400/50', animate: '', label: 'Idle' }
 	);
 </script>
 

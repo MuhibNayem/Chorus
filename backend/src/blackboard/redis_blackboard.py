@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime
 import redis.asyncio as redis
+from .event_log import append_project_event
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
@@ -99,6 +100,8 @@ class RedisBlackboard:
         content: str,
         data: Optional[Dict[str, Any]] = None,
     ):
+        if not self._redis:
+            await self.connect()
         channel = f"project:{project_id}:events"
         message = {
             "agent_name": agent_name,
@@ -108,6 +111,7 @@ class RedisBlackboard:
             "data": data or {},
             "timestamp": datetime.now().isoformat(),
         }
+        message = await append_project_event(self._redis, project_id, message)
         logging.getLogger("blackboard").info(
             f"[RedisBlackboard] publish project={project_id} agent={agent_name} type={event_type}"
         )
@@ -150,3 +154,24 @@ class RedisBlackboard:
     async def release_lock(self, lock_name: str):
         lock_key = f"lock:{lock_name}"
         await self.delete(lock_key)
+
+    async def delete_project_keys(self, project_id: str) -> int:
+        """Delete all Redis keys associated with a project. Returns count of deleted keys."""
+        if not self._redis:
+            await self.connect()
+        pattern = f"project:{project_id}:*"
+        deleted = 0
+        cursor = 0
+        while True:
+            cursor, keys = await self._redis.scan(cursor, match=pattern, count=100)
+            if keys:
+                await self._redis.delete(*keys)
+                deleted += len(keys)
+            if cursor == 0:
+                break
+        # Also delete the bare project state key if it exists without colon suffix
+        state_key = f"project:{project_id}:state"
+        if await self._redis.exists(state_key):
+            await self._redis.delete(state_key)
+            deleted += 1
+        return deleted

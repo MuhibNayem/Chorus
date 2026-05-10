@@ -180,3 +180,22 @@ class MinioStorage:
             }
         except S3Error:
             return None
+
+    async def delete_objects_by_prefix(self, prefix: str) -> Dict[str, Any]:
+        """Delete all objects with the given prefix."""
+        try:
+            objects = self.client.list_objects(self.bucket, prefix=prefix, recursive=True)
+            deleted = []
+            errors = []
+            for obj in objects:
+                try:
+                    self.client.remove_object(self.bucket, obj.object_name)
+                    deleted.append(obj.object_name)
+                    logger.info(f"[MinioStorage] Deleted: {obj.object_name}")
+                except S3Error as e:
+                    logger.error(f"[MinioStorage] Failed to delete {obj.object_name}: {e}")
+                    errors.append({"object": obj.object_name, "error": str(e)})
+            return {"status": "success", "deleted": deleted, "errors": errors, "count": len(deleted)}
+        except S3Error as e:
+            logger.error(f"[MinioStorage] Delete by prefix failed: {e}")
+            return {"status": "error", "error": str(e)}

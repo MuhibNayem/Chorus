@@ -3,6 +3,7 @@ import logging
 import zipfile
 import asyncio
 import shutil
+import subprocess
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -16,6 +17,9 @@ WORKSPACE_MAX_AGE_HOURS = int(os.environ.get("WORKSPACE_MAX_AGE_HOURS", "24"))
 
 # Thread-safe project context
 _project_id_var: ContextVar[Optional[str]] = ContextVar("project_id", default=None)
+_agent_workspace_scope_var: ContextVar[Optional[str]] = ContextVar("agent_workspace_scope", default=None)
+_agent_name_var: ContextVar[Optional[str]] = ContextVar("workspace_agent_name", default=None)
+_agent_workspace_locked_var: ContextVar[bool] = ContextVar("agent_workspace_locked", default=False)
 
 
 def _validate_workspace_path(workspace: Path, relative_path: str) -> Path:
@@ -74,6 +78,28 @@ def set_project_context(project_id: str):
     _project_id_var.set(project_id)
 
 
+def set_agent_workspace_scope(agent_name: str):
+    """Set the workspace subdirectory owned by the current agent task."""
+    _agent_name_var.set(agent_name)
+    _agent_workspace_locked_var.set(False)
+    scope = {
+        "backend": "backend",
+        "frontend": "frontend",
+    }.get(agent_name)
+    _agent_workspace_scope_var.set(scope)
+
+
+def lock_agent_workspace_writes():
+    _agent_workspace_locked_var.set(True)
+
+
+def _workspace_write_violation(relative_path: str) -> Optional[str]:
+    agent_name = _agent_name_var.get() or "unknown"
+    if _agent_workspace_locked_var.get():
+        return f"{agent_name} agent cannot write after terminal completion: {relative_path}"
+    return _deployment_write_violation(relative_path)
+
+
 def get_project_id() -> str:
     pid = _project_id_var.get()
     if not pid:
@@ -85,6 +111,126 @@ def get_workspace() -> Path:
     workspace = WORKSPACE_BASE / get_project_id()
     workspace.mkdir(parents=True, exist_ok=True)
     return workspace
+
+
+def snapshot_workspace(project_id: str, label: str) -> str | None:
+    """Create a git commit of the current workspace state.
+    Returns the commit hash, or None if git is unavailable."""
+    workspace = WORKSPACE_BASE / project_id
+    if not workspace.exists():
+        return None
+    try:
+        if not (workspace / ".git").exists():
+            subprocess.run(
+                ["git", "init"], cwd=workspace, check=True,
+                capture_output=True, text=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "swarm@local"],
+                cwd=workspace, check=True, capture_output=True, text=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Swarm"],
+                cwd=workspace, check=True, capture_output=True, text=True,
+            )
+        subprocess.run(
+            ["git", "add", "-A"], cwd=workspace, check=True,
+            capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", f"swarm-snapshot: {label}", "--allow-empty"],
+            cwd=workspace, check=True, capture_output=True, text=True,
+        )
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=workspace, check=True,
+            capture_output=True, text=True,
+        )
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        logger.warning("[snapshot_workspace] Git snapshot failed: %s", exc)
+        return None
+
+
+def rollback_workspace(project_id: str, commit_hash: str) -> bool:
+    """Hard-reset workspace to a previous snapshot.
+    Returns True on success, False on failure."""
+    workspace = WORKSPACE_BASE / project_id
+    if not workspace.exists():
+        return False
+    try:
+        subprocess.run(
+            ["git", "reset", "--hard", commit_hash],
+            cwd=workspace, check=True, capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["git", "clean", "-fd"],
+            cwd=workspace, check=True, capture_output=True, text=True,
+        )
+        logger.info("[rollback_workspace] Rolled back %s to %s", project_id, commit_hash[:12])
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        logger.error("[rollback_workspace] Rollback failed: %s", exc)
+        return False
+
+
+
+
+
+def _scoped_write_path(relative_path: str) -> str:
+    scope = _agent_workspace_scope_var.get()
+    if not scope:
+        return relative_path
+
+    clean_path = relative_path.strip().lstrip("./")
+    if clean_path == scope or clean_path.startswith(f"{scope}/"):
+        return clean_path
+    return f"{scope}/{clean_path}" if clean_path else scope
+
+
+def _deployment_write_violation(relative_path: str) -> Optional[str]:
+    agent_name = _agent_name_var.get()
+    if agent_name not in {"backend", "frontend"}:
+        return None
+
+    normalized = relative_path.strip().lstrip("./")
+    lowered = normalized.lower()
+    parts = lowered.split("/")
+    filename = parts[-1] if parts else lowered
+
+    deployment_names = {
+        "dockerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "docker-compose.prod.yml",
+        "docker-compose.prod.yaml",
+        "nginx.conf",
+    }
+    deployment_prefixes = (
+        ".github/",
+        "kubernetes/",
+        "k8s/",
+        "nginx/",
+    )
+
+    if (
+        filename in deployment_names
+        or lowered.startswith(deployment_prefixes)
+        or any(part in {"nginx", "kubernetes", "k8s", ".github"} for part in parts)
+    ):
+        return f"{agent_name} agent cannot write deployment artifact: {relative_path}"
+    return None
+
+
+def _resolve_read_path(workspace: Path, relative_path: str) -> Path:
+    full_path = _validate_workspace_path(workspace, relative_path)
+    scope = _agent_workspace_scope_var.get()
+    if full_path.exists() or not scope:
+        return full_path
+
+    scoped_path = _scoped_write_path(relative_path)
+    if scoped_path == relative_path:
+        return full_path
+    return _validate_workspace_path(workspace, scoped_path)
 
 
 def get_storage():
@@ -284,6 +430,49 @@ async def run_docker_container(image_name: str, port: int = 8080) -> Dict[str, A
         return {"status": "error", "error": str(e)}
 
 
+async def _check_claimed_evidence(file_path: str) -> Optional[str]:
+    """Async helper: check if *file_path* is locked by a VALID claim
+    from the current agent.  Returns an error message or None."""
+    agent_name = _agent_name_var.get()
+    project_id = _project_id_var.get()
+    if not agent_name or not project_id:
+        return None
+
+    from ..claim_store import ClaimStore
+    from ..claims import ClaimStatus
+
+    store = ClaimStore()
+    try:
+        # Check all claim types; if any valid claim from this agent
+        # lists this file in evidence, block the write.
+        from ..claims import ClaimType
+        for ct in ClaimType:
+            claim = await store.get_latest_claim(project_id, ct.value)
+            if (
+                claim
+                and claim.get("producer_agent") == agent_name
+                and claim.get("status") == ClaimStatus.VALID.value
+            ):
+                evidence = claim.get("evidence") or {}
+                files = evidence.get("files") or []
+                for ev_file in files:
+                    # Normalize both paths for comparison
+                    ev_norm = str(ev_file).strip().lstrip("./")
+                    fp_norm = file_path.strip().lstrip("./")
+                    if ev_norm == fp_norm:
+                        return (
+                            f"{agent_name} cannot modify {file_path}: "
+                            f"it is locked as evidence in VALID claim {ct.value}. "
+                            f"Publish a new claim or mark the old one stale first."
+                        )
+        return None
+    except Exception as exc:
+        logger.warning("[_check_claimed_evidence] Check failed: %s", exc)
+        return None
+    finally:
+        await store.close()
+
+
 @tool("write_file")
 async def write_file(file_path: str, content: str) -> Dict[str, Any]:
     """Write content to a file in the project workspace.
@@ -293,12 +482,33 @@ async def write_file(file_path: str, content: str) -> Dict[str, Any]:
         content: The content to write
     """
     try:
+        file_path = _scoped_write_path(file_path)
+        violation = _workspace_write_violation(file_path)
+        if violation:
+            logger.error(f"[write_file] {violation}")
+            return {"status": "error", "file_path": file_path, "error": violation}
+
+        # Phase 1: Pre-write guardrail — block writes to claimed evidence
+        claim_violation = await _check_claimed_evidence(file_path)
+        if claim_violation:
+            logger.error(f"[write_file] {claim_violation}")
+            return {"status": "error", "file_path": file_path, "error": claim_violation}
+
         workspace = get_workspace()
         full_path = _validate_workspace_path(workspace, file_path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
-        # For small file writes, we can stay sync or use to_thread
         full_path.write_text(content)
         logger.info(f"[write_file] Created: {file_path}")
+
+        # Invalidate the snapshot cache so the next context build reflects this write.
+        project_id = _project_id_var.get()
+        if project_id:
+            try:
+                from ..context_engineering import invalidate_snapshot_cache
+                invalidate_snapshot_cache(project_id)
+            except Exception:
+                pass
+
         return {
             "status": "success",
             "file_path": file_path,
@@ -321,7 +531,7 @@ async def read_file(file_path: str) -> Dict[str, Any]:
     """
     try:
         workspace = get_workspace()
-        full_path = _validate_workspace_path(workspace, file_path)
+        full_path = _resolve_read_path(workspace, file_path)
         if not full_path.exists():
             return {"status": "error", "file_path": file_path, "error": "File not found"}
         content = full_path.read_text()
@@ -348,7 +558,10 @@ async def list_files(directory: str = "") -> Dict[str, Any]:
     """
     try:
         workspace = get_workspace()
-        dir_path = _validate_workspace_path(workspace, directory) if directory else workspace
+        if directory:
+            dir_path = _resolve_read_path(workspace, directory)
+        else:
+            dir_path = workspace
         if not dir_path.exists():
             return {"status": "error", "directory": directory, "error": "Directory not found"}
 
@@ -407,6 +620,11 @@ async def create_directory(directory: str) -> Dict[str, Any]:
         directory: Relative path from workspace root
     """
     try:
+        directory = _scoped_write_path(directory)
+        violation = _workspace_write_violation(directory)
+        if violation:
+            logger.error(f"[create_directory] {violation}")
+            return {"status": "error", "directory": directory, "error": violation}
         workspace = get_workspace()
         dir_path = _validate_workspace_path(workspace, directory)
         dir_path.mkdir(parents=True, exist_ok=True)
@@ -428,6 +646,11 @@ async def delete_file(file_path: str) -> Dict[str, Any]:
         file_path: Relative path from workspace root
     """
     try:
+        file_path = _scoped_write_path(file_path)
+        violation = _workspace_write_violation(file_path)
+        if violation:
+            logger.error(f"[delete_file] {violation}")
+            return {"status": "error", "file_path": file_path, "error": violation}
         workspace = get_workspace()
         full_path = _validate_workspace_path(workspace, file_path)
         if full_path.exists():
@@ -441,6 +664,143 @@ async def delete_file(file_path: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"[delete_file] Failed to delete {file_path}: {e}")
         return {"status": "error", "file_path": file_path, "error": str(e)}
+
+
+@tool("write_spec_file")
+async def write_spec_file(file_path: str, content: str) -> Dict[str, Any]:
+    """Write a specification or planning file in the project workspace root.
+
+    This tool is scoped to the workspace root only — subdirectory writes are
+    blocked. Use it for SPEC.md, AGENTS_NEEDED.json, and similar planning files.
+    To create backend/ or frontend/ directories use create_directory instead.
+
+    Args:
+        file_path: Filename or root-level path (e.g. "SPEC.md"). Paths into
+                   subdirectories (e.g. "backend/main.go") are rejected.
+        content: The content to write.
+    """
+    try:
+        clean = file_path.strip().lstrip("./")
+        if "/" in clean or "\\" in clean:
+            msg = (
+                f"write_spec_file is restricted to the workspace root. "
+                f"'{file_path}' targets a subdirectory. "
+                f"Use write_file via the backend/frontend agent instead."
+            )
+            logger.error("[write_spec_file] %s", msg)
+            return {"status": "error", "file_path": file_path, "error": msg}
+
+        if _agent_workspace_locked_var.get():
+            agent_name = _agent_name_var.get() or "unknown"
+            msg = f"{agent_name} agent cannot write after terminal completion: {file_path}"
+            logger.error("[write_spec_file] %s", msg)
+            return {"status": "error", "file_path": file_path, "error": msg}
+
+        workspace = get_workspace()
+        full_path = _validate_workspace_path(workspace, clean)
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content)
+        logger.info("[write_spec_file] Created: %s", clean)
+
+        project_id = _project_id_var.get()
+        if project_id:
+            try:
+                from ..context_engineering import invalidate_snapshot_cache
+                invalidate_snapshot_cache(project_id)
+            except Exception:
+                pass
+
+        return {"status": "success", "file_path": clean, "bytes_written": len(content)}
+    except PermissionError as e:
+        logger.error("[write_spec_file] Blocked path traversal: %s", file_path)
+        return {"status": "error", "file_path": file_path, "error": str(e)}
+    except Exception as e:
+        logger.error("[write_spec_file] Failed to write %s: %s", file_path, e)
+        return {"status": "error", "file_path": file_path, "error": str(e)}
+
+
+async def delete_backend_directory(dir_path: str) -> Dict[str, Any]:
+    """Delete a directory from the backend/ subdirectory.
+
+    Args:
+        dir_path: Relative path from workspace root (must be in backend/)
+    """
+    try:
+        agent_name = _agent_name_var.get()
+        if agent_name != "backend":
+            return {"status": "error", "dir_path": dir_path, "error": "Only backend agent can use delete_backend_directory"}
+
+        dir_path = _scoped_write_path(dir_path)
+
+        normalized = dir_path.strip().lstrip("./")
+        if not normalized.startswith("backend/") and normalized != "backend":
+            return {"status": "error", "dir_path": dir_path, "error": "Backend agent can only delete within backend/ directory"}
+
+        violation = _workspace_write_violation(dir_path)
+        if violation:
+            logger.error(f"[delete_backend_directory] {violation}")
+            return {"status": "error", "dir_path": dir_path, "error": violation}
+
+        workspace = get_workspace()
+        full_path = _validate_workspace_path(workspace, dir_path)
+
+        if not full_path.exists():
+            return {"status": "error", "dir_path": dir_path, "error": "Directory not found"}
+
+        if not full_path.is_dir():
+            return {"status": "error", "dir_path": dir_path, "error": "Path is not a directory"}
+
+        shutil.rmtree(full_path)
+        logger.info(f"[delete_backend_directory] Deleted: {dir_path}")
+        return {"status": "success", "dir_path": dir_path}
+    except PermissionError as e:
+        logger.error(f"[delete_backend_directory] Blocked path traversal: {dir_path}")
+        return {"status": "error", "dir_path": dir_path, "error": str(e)}
+    except Exception as e:
+        logger.error(f"[delete_backend_directory] Failed to delete {dir_path}: {e}")
+        return {"status": "error", "dir_path": dir_path, "error": str(e)}
+
+
+async def delete_frontend_directory(dir_path: str) -> Dict[str, Any]:
+    """Delete a directory from the frontend/ subdirectory.
+
+    Args:
+        dir_path: Relative path from workspace root (must be in frontend/)
+    """
+    try:
+        agent_name = _agent_name_var.get()
+        if agent_name != "frontend":
+            return {"status": "error", "dir_path": dir_path, "error": "Only frontend agent can use delete_frontend_directory"}
+
+        dir_path = _scoped_write_path(dir_path)
+
+        normalized = dir_path.strip().lstrip("./")
+        if not normalized.startswith("frontend/") and normalized != "frontend":
+            return {"status": "error", "dir_path": dir_path, "error": "Frontend agent can only delete within frontend/ directory"}
+
+        violation = _workspace_write_violation(dir_path)
+        if violation:
+            logger.error(f"[delete_frontend_directory] {violation}")
+            return {"status": "error", "dir_path": dir_path, "error": violation}
+
+        workspace = get_workspace()
+        full_path = _validate_workspace_path(workspace, dir_path)
+
+        if not full_path.exists():
+            return {"status": "error", "dir_path": dir_path, "error": "Directory not found"}
+
+        if not full_path.is_dir():
+            return {"status": "error", "dir_path": dir_path, "error": "Path is not a directory"}
+
+        shutil.rmtree(full_path)
+        logger.info(f"[delete_frontend_directory] Deleted: {dir_path}")
+        return {"status": "success", "dir_path": dir_path}
+    except PermissionError as e:
+        logger.error(f"[delete_frontend_directory] Blocked path traversal: {dir_path}")
+        return {"status": "error", "dir_path": dir_path, "error": str(e)}
+    except Exception as e:
+        logger.error(f"[delete_frontend_directory] Failed to delete {dir_path}: {e}")
+        return {"status": "error", "dir_path": dir_path, "error": str(e)}
 
 
 def get_generic_tools(project_id: str):
@@ -458,6 +818,7 @@ def get_generic_tools(project_id: str):
 
 TOOLS_REGISTRY = {
     "write_file": write_file,
+    "write_spec_file": write_spec_file,
     "read_file": read_file,
     "list_files": list_files,
     "execute_command": execute_command,

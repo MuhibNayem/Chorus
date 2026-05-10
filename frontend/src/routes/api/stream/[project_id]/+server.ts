@@ -3,7 +3,7 @@ import { env } from '$env/dynamic/private';
 
 const BACKEND = env.BACKEND_URL || 'http://localhost:8000';
 
-export const GET: RequestHandler = async ({ params, url }) => {
+export const GET: RequestHandler = async ({ params, url, request }) => {
 	const projectId = params.project_id;
 	const paramsOut = new URLSearchParams();
 	const contextMode = url.searchParams.get('context_mode');
@@ -20,8 +20,10 @@ export const GET: RequestHandler = async ({ params, url }) => {
 		: `${BACKEND}/api/stream/${projectId}`;
 
 	const response = await fetch(backendUrl, {
+		signal: request.signal,
 		headers: {
-			Accept: 'text/event-stream'
+			Accept: 'text/event-stream',
+			'Cache-Control': 'no-cache'
 		}
 	});
 
@@ -38,8 +40,9 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	return new Response(stream, {
 		headers: {
 			'Content-Type': 'text/event-stream',
-			'Cache-Control': 'no-cache',
-			'Connection': 'keep-alive'
+			'Cache-Control': 'no-cache, no-transform',
+			'Connection': 'keep-alive',
+			'X-Accel-Buffering': 'no'
 		}
 	});
 };

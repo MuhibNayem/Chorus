@@ -2,7 +2,9 @@
 	import FileTree from './FileTree.svelte';
 	import MonacoEditor from './MonacoEditor.svelte';
 	import type { EditorTab } from './MonacoEditor.svelte';
-	import { Code2, PanelRightClose, PanelRight } from 'lucide-svelte';
+	import Code2 from '@lucide/svelte/icons/code-2';
+	import PanelRightClose from '@lucide/svelte/icons/panel-right-close';
+	import PanelRight from '@lucide/svelte/icons/panel-right';
 
 	interface FileNode {
 		name: string;
@@ -16,9 +18,10 @@
 		projectId?: string;
 		collapsed?: boolean;
 		onToggleCollapse?: () => void;
+		lastWrittenFile?: { path: string; ts: number; content?: string; phase?: string };
 	}
 
-	let { files = [], projectId, collapsed = false, onToggleCollapse }: Props = $props();
+	let { files = [], projectId, collapsed = false, onToggleCollapse, lastWrittenFile }: Props = $props();
 
 	let openTabs = $state<EditorTab[]>([]);
 	let activeTabPath = $state<string | undefined>(undefined);
@@ -32,7 +35,14 @@
 				const fileName = path.split('/').pop() || path;
 
 				const existingTab = openTabs.find(t => t.path === path);
-				if (!existingTab) {
+				if (existingTab) {
+					// Always re-fetch — agent may have updated the file since it was first opened
+					openTabs = openTabs.map(t =>
+						t.path === path
+							? { ...t, content: data.content, language: data.language || t.language }
+							: t
+					);
+				} else {
 					openTabs = [...openTabs, {
 						path,
 						name: fileName,
@@ -46,6 +56,24 @@
 			console.error('Failed to load file:', error);
 		}
 	}
+
+	// Silently refresh open tab content when an agent writes to that file
+	$effect(() => {
+		if (!lastWrittenFile || !projectId) return;
+		const { path, content, phase } = lastWrittenFile;
+		const isOpen = openTabs.some(t => t.path === path);
+		if (isOpen) {
+			if (typeof content === 'string' && phase === 'preview') {
+				openTabs = openTabs.map(t =>
+					t.path === path
+						? { ...t, content }
+						: t
+				);
+				return;
+			}
+			loadFileContent(path);
+		}
+	});
 
 	$effect(() => {
 		if (openTabs.length > 0 && !activeTabPath) {
@@ -105,6 +133,7 @@
 				<MonacoEditor
 					tabs={openTabs}
 					activeTab={activeTabPath}
+					{projectId}
 					onTabSelect={(path) => activeTabPath = path}
 					onTabClose={handleTabClose}
 					readOnly={true}

@@ -1,22 +1,22 @@
 <script lang="ts">
 	import type { AgentStream } from '$lib/agent-registry.svelte';
 	import StatusPulse from './StatusPulse.svelte';
+	import ClaimPanel from './ClaimPanel.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent, CardHeader } from '$lib/components/ui/card';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import {
-		X,
-		Brain,
-		Wrench,
-		Terminal,
-		Clock,
-		CheckCircle2,
-		XCircle,
-		Loader2,
-		Copy,
-		Check,
-		ListTodo
-	} from 'lucide-svelte';
+	import X from '@lucide/svelte/icons/x';
+	import Brain from '@lucide/svelte/icons/brain';
+	import Wrench from '@lucide/svelte/icons/wrench';
+	import Terminal from '@lucide/svelte/icons/terminal';
+	import Clock from '@lucide/svelte/icons/clock';
+	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
+	import XCircle from '@lucide/svelte/icons/x-circle';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import Copy from '@lucide/svelte/icons/copy';
+	import Check from '@lucide/svelte/icons/check';
+	import ListTodo from '@lucide/svelte/icons/list-todo';
+	import Shield from '@lucide/svelte/icons/shield';
 
 	let {
 		agent,
@@ -26,7 +26,7 @@
 		onClose: () => void;
 	} = $props();
 
-	let activeTab = $state<'stream' | 'plan' | 'thinking' | 'tools'>('stream');
+	let activeTab = $state<'stream' | 'plan' | 'thinking' | 'tools' | 'claims'>('stream');
 	let copied = $state(false);
 
 	const statusConfig = $derived(

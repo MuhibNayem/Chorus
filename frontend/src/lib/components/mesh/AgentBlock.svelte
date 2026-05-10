@@ -3,30 +3,44 @@
 	import StatusPulse from './StatusPulse.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent } from '$lib/components/ui/card';
-	import {
-		Bot,
-		Brain,
-		Wrench,
-		MessageSquare,
-		ChevronRight,
-		Terminal,
-		Sparkles,
-		Database,
-		Layout,
-		Network,
-		Server,
-		Code
-	} from 'lucide-svelte';
+	import Bot from '@lucide/svelte/icons/bot';
+	import Brain from '@lucide/svelte/icons/brain';
+	import Wrench from '@lucide/svelte/icons/wrench';
+	import MessageSquare from '@lucide/svelte/icons/message-square';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import Terminal from '@lucide/svelte/icons/terminal';
+	import Sparkles from '@lucide/svelte/icons/sparkles';
+	import Database from '@lucide/svelte/icons/database';
+	import Layout from '@lucide/svelte/icons/layout';
+	import Network from '@lucide/svelte/icons/network';
+	import Server from '@lucide/svelte/icons/server';
+	import Code from '@lucide/svelte/icons/code';
+	import Pause from '@lucide/svelte/icons/pause';
+	import Play from '@lucide/svelte/icons/play';
+	import SendHorizontal from '@lucide/svelte/icons/send-horizontal';
+	import X from '@lucide/svelte/icons/x';
 
 	let {
 		agent,
 		isSelected,
-		onSelect
+		onSelect,
+		projectId,
+		onPause,
+		onResume,
+		onDirect
 	}: {
 		agent: AgentStream;
 		isSelected: boolean;
 		onSelect: (id: string) => void;
+		projectId?: string | null;
+		onPause?: (agentId: string) => void;
+		onResume?: (agentId: string, message: string) => void;
+		onDirect?: (agentId: string, message: string) => void;
 	} = $props();
+
+	let showDirectInput = $state(false);
+	let directMessage = $state('');
+	let resumeMessage = $state('');
 
 	const agentTheme = $derived(
 		agent.id === 'agent-rootdep'
@@ -41,17 +55,48 @@
 	);
 
 	const isActive = $derived(agent.status === 'working' || agent.status === 'thinking');
+	const isPaused = $derived(agent.status === 'paused');
+	const isStopped = $derived(agent.status === 'stopped');
 	const hasThinking = $derived(agent.thinking.length > 0);
 	const hasTools = $derived(agent.toolCalls.length > 0);
 	const hasText = $derived(agent.textOutput.length > 0);
 	const latestEvents = $derived(agent.events.slice(-3));
-	
+	const canControl = $derived(!!projectId && (isActive || isPaused));
+
 	const Icon = $derived(agentTheme.icon);
+
+	function handlePause(e: Event) {
+		e.stopPropagation();
+		onPause?.(agent.id);
+	}
+
+	function handleDirect(e: Event) {
+		e.stopPropagation();
+		if (directMessage.trim()) {
+			onDirect?.(agent.id, directMessage.trim());
+			directMessage = '';
+			showDirectInput = false;
+		}
+	}
+
+	function handleResume(e: Event) {
+		e.stopPropagation();
+		if (resumeMessage.trim()) {
+			onResume?.(agent.id, resumeMessage.trim());
+			resumeMessage = '';
+		}
+	}
+
+	function cancelDirect(e: Event) {
+		e.stopPropagation();
+		showDirectInput = false;
+		directMessage = '';
+	}
 </script>
 
 <button
 	type="button"
-	class="group relative w-full text-left transition-all duration-300 {isSelected ? 'scale-[1.02]' : 'hover:scale-[1.01]'}"
+	class="group relative w-full text-left transition-all duration-300 {isSelected ? 'scale-[1.02]' : 'hover:scale-[1.01]'}{isPaused ? ' opacity-90' : ''}{isStopped ? ' opacity-70 grayscale-[0.3]' : ''}"
 	onclick={() => onSelect(agent.id)}
 >
 	<Card
@@ -79,6 +124,80 @@
 				</div>
 				<ChevronRight class="h-4 w-4 text-muted-foreground/40 transition-all duration-300 group-hover:text-muted-foreground group-hover:translate-x-0.5" />
 			</div>
+
+			<!-- Control Buttons -->
+			{#if canControl}
+				<div class="flex items-center gap-2">
+					{#if isActive}
+						<button
+							type="button"
+							onclick={handlePause}
+							class="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-100/60 text-amber-700 text-[11px] font-medium hover:bg-amber-100 transition-colors"
+						>
+							<Pause class="h-3 w-3" />
+							<span>Pause</span>
+						</button>
+						<button
+							type="button"
+							onclick={(e) => { e.stopPropagation(); showDirectInput = true; }}
+							class="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-primary/10 text-primary text-[11px] font-medium hover:bg-primary/15 transition-colors"
+						>
+							<SendHorizontal class="h-3 w-3" />
+							<span>Direct</span>
+						</button>
+					{:else if isPaused}
+						<span class="text-[11px] text-amber-600 font-medium">Paused — waiting for input</span>
+					{/if}
+				</div>
+			{/if}
+
+			<!-- Direct Input -->
+			{#if showDirectInput && isActive}
+				<div class="flex items-center gap-2" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="button" tabindex="-1">
+					<input
+						type="text"
+						bind:value={directMessage}
+						placeholder="Send directive to {agent.name}..."
+						class="flex-1 h-8 rounded-lg border border-white/50 bg-white/60 px-2.5 text-xs shadow-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-primary/30 focus:bg-white"
+						onkeydown={(e) => { if (e.key === 'Enter') handleDirect(e); if (e.key === 'Escape') cancelDirect(e); }}
+					/>
+					<button
+						type="button"
+						onclick={handleDirect}
+						class="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+					>
+						<SendHorizontal class="h-3.5 w-3.5" />
+					</button>
+					<button
+						type="button"
+						onclick={cancelDirect}
+						class="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-muted text-muted-foreground hover:bg-muted/80 transition-colors"
+					>
+						<X class="h-3.5 w-3.5" />
+					</button>
+				</div>
+			{/if}
+
+			<!-- Resume Input -->
+			{#if isPaused}
+				<div class="flex items-center gap-2" onclick={(e) => e.stopPropagation()} onkeydown={(e) => e.stopPropagation()} role="button" tabindex="-1">
+					<input
+						type="text"
+						bind:value={resumeMessage}
+						placeholder="Resume with feedback..."
+						class="flex-1 h-8 rounded-lg border border-amber-200 bg-amber-50/40 px-2.5 text-xs shadow-sm outline-none transition-colors placeholder:text-amber-400/60 focus:border-amber-300 focus:bg-amber-50/60"
+						onkeydown={(e) => { if (e.key === 'Enter') handleResume(e); }}
+					/>
+					<button
+						type="button"
+						onclick={handleResume}
+						class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-amber-500 text-white text-[11px] font-medium hover:bg-amber-600 transition-colors"
+					>
+						<Play class="h-3 w-3" />
+						<span>Resume</span>
+					</button>
+				</div>
+			{/if}
 
 			<!-- Current Action -->
 			{#if agent.currentAction}
@@ -131,7 +250,7 @@
 					<!-- Progress Bar -->
 					<div class="h-1.5 w-full overflow-hidden rounded-full bg-black/5">
 						<div
-							class="h-full rounded-full transition-all duration-500 ease-out {agent.status === 'complete' ? 'bg-emerald-400' : agent.status === 'error' ? 'bg-rose-400' : 'bg-primary'}"
+							class="h-full rounded-full transition-all duration-500 ease-out {agent.status === 'complete' ? 'bg-emerald-400' : agent.status === 'error' ? 'bg-rose-400' : agent.status === 'paused' ? 'bg-amber-400' : 'bg-primary'}"
 							style="width: {agent.progress.percent}%"
 						></div>
 					</div>

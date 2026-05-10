@@ -1,22 +1,20 @@
 <script lang="ts">
-	import {
-		Folder,
-		FolderOpen,
-		Coffee,
-		Image,
-		Braces,
-		CodeXml,
-		ScrollText,
-		FileCog,
-		FileCode,
-		FileText,
-		FileTerminal,
-		FileType,
-		ChevronRight,
-		ChevronDown,
-		Search,
-		X
-	} from 'lucide-svelte';
+	import Folder from '@lucide/svelte/icons/folder';
+	import FolderOpen from '@lucide/svelte/icons/folder-open';
+	import Coffee from '@lucide/svelte/icons/coffee';
+	import Image from '@lucide/svelte/icons/image';
+	import Braces from '@lucide/svelte/icons/braces';
+	import CodeXml from '@lucide/svelte/icons/code-xml';
+	import ScrollText from '@lucide/svelte/icons/scroll-text';
+	import FileCog from '@lucide/svelte/icons/file-cog';
+	import FileCode from '@lucide/svelte/icons/file-code';
+	import FileText from '@lucide/svelte/icons/file-text';
+	import FileTerminal from '@lucide/svelte/icons/file-terminal';
+	import FileType from '@lucide/svelte/icons/file-type';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Search from '@lucide/svelte/icons/search';
+	import X from '@lucide/svelte/icons/x';
 
 	interface FileNode {
 		name: string;

@@ -2,7 +2,11 @@
 	import { cn } from '$lib/utils';
 	import type { AgentActivity } from '$lib/types';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Bot, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-svelte';
+	import Bot from '@lucide/svelte/icons/bot';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
+	import XCircle from '@lucide/svelte/icons/x-circle';
+	import Clock from '@lucide/svelte/icons/clock';
 
 	let { activities }: { activities: AgentActivity[] } = $props();
 

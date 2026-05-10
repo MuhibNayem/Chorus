@@ -1,7 +1,16 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { X, Download, Copy, Check } from 'lucide-svelte';
+	import X from '@lucide/svelte/icons/x';
+	import Download from '@lucide/svelte/icons/download';
+	import Copy from '@lucide/svelte/icons/copy';
+	import Check from '@lucide/svelte/icons/check';
+	import FolderArchive from '@lucide/svelte/icons/folder-archive';
 	import type * as Monaco from 'monaco-editor';
+	import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
+	import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
+	import CssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
+	import HtmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
+	import TsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
 
 	export interface EditorTab {
 		path: string;
@@ -13,19 +22,27 @@
 	interface Props {
 		tabs: EditorTab[];
 		activeTab?: string;
+		projectId?: string;
 		onTabClose?: (path: string) => void;
 		onTabSelect?: (path: string) => void;
 		onSave?: (path: string, content: string) => void;
 		readOnly?: boolean;
 	}
 
-	let { tabs = [], activeTab, onTabClose, onTabSelect, onSave, readOnly = true }: Props = $props();
+	let { tabs = [], activeTab, projectId, onTabClose, onTabSelect, onSave, readOnly = true }: Props = $props();
 
 	let editorContainer: HTMLDivElement;
 	let editor = $state<Monaco.editor.IStandaloneCodeEditor | null>(null);
 	let monaco = $state<typeof Monaco | null>(null);
 	let copied = $state(false);
 	let currentContent = $state('');
+	let currentModel: Monaco.editor.ITextModel | null = null;
+
+	type MonacoEnvironmentWindow = Window & {
+		MonacoEnvironment?: {
+			getWorker?: (_moduleId: string, label: string) => Worker;
+		};
+	};
 
 	function getLanguage(filename: string): string {
 		const ext = filename.split('.').pop()?.toLowerCase() || '';
@@ -52,6 +69,16 @@
 	}
 
 	async function initMonaco() {
+		(window as MonacoEnvironmentWindow).MonacoEnvironment = {
+			getWorker(_moduleId: string, label: string) {
+				if (label === 'json') return new JsonWorker();
+				if (label === 'css' || label === 'scss' || label === 'less') return new CssWorker();
+				if (label === 'html' || label === 'handlebars' || label === 'razor') return new HtmlWorker();
+				if (label === 'typescript' || label === 'javascript') return new TsWorker();
+				return new EditorWorker();
+			}
+		};
+
 		const monacoModule = await import('monaco-editor');
 		monaco = monacoModule;
 
@@ -113,11 +140,13 @@
 	function loadTab(tab: EditorTab) {
 		if (!editor || !monaco) return;
 
+		currentModel?.dispose();
 		const model = monaco.editor.createModel(
 			tab.content,
 			getLanguage(tab.name)
 		);
 
+		currentModel = model;
 		editor.setModel(model);
 		currentContent = tab.content;
 	}
@@ -137,7 +166,9 @@
 
 	export function setContent(content: string, language: string = 'plaintext') {
 		if (!editor || !monaco) return;
+		currentModel?.dispose();
 		const model = monaco.editor.createModel(content, language);
+		currentModel = model;
 		editor.setModel(model);
 		currentContent = content;
 	}
@@ -163,11 +194,31 @@
 		URL.revokeObjectURL(url);
 	}
 
+	async function downloadProjectZip() {
+		if (!projectId) return;
+		try {
+			const response = await fetch(`/api/download/${projectId}/project.zip`);
+			if (!response.ok) {
+				throw new Error(`HTTP ${response.status}`);
+			}
+			const blob = await response.blob();
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `project_${projectId.slice(0, 8)}.zip`;
+			a.click();
+			URL.revokeObjectURL(url);
+		} catch (error) {
+			console.error('Failed to download project ZIP:', error);
+		}
+	}
+
 	onMount(() => {
 		initMonaco();
 	});
 
 	onDestroy(() => {
+		currentModel?.dispose();
 		editor?.dispose();
 	});
 </script>
@@ -226,6 +277,15 @@
 		>
 			<Download class="h-3.5 w-3.5" />
 			<span>Download</span>
+		</button>
+		<button
+			onclick={downloadProjectZip}
+			disabled={!projectId}
+			class="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground/70 hover:text-foreground hover:bg-white/5 rounded transition-colors disabled:opacity-50"
+			title="Download project ZIP"
+		>
+			<FolderArchive class="h-3.5 w-3.5" />
+			<span>Project ZIP</span>
 		</button>
 		<div class="flex-1"></div>
 		{#if activeTab}

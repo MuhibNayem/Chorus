@@ -17,22 +17,26 @@
 	import { AGUIClient } from "$lib/aguiclient";
 	import ProjectSidebar from "$lib/components/ProjectSidebar.svelte";
 	import CodeView from "$lib/components/codeview/CodeView.svelte";
-	import {
-		Send,
-		Loader2,
-		Hexagon,
-		RefreshCcw,
-		History,
-		PanelLeftOpen,
-		Map,
-		Play,
-		Eye,
-		Code2,
-	} from "lucide-svelte";
+	import Send from '@lucide/svelte/icons/send';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import Hexagon from '@lucide/svelte/icons/hexagon';
+	import RefreshCcw from '@lucide/svelte/icons/refresh-ccw';
+	import History from '@lucide/svelte/icons/history';
+	import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
+	import Map from '@lucide/svelte/icons/map';
+	import Play from '@lucide/svelte/icons/play';
+	import Eye from '@lucide/svelte/icons/eye';
+	import Code2 from '@lucide/svelte/icons/code-2';
+	import Settings from '@lucide/svelte/icons/settings';
+	import Square from '@lucide/svelte/icons/square';
+	import { settings } from "$lib/settings.svelte";
 
 	let inputValue = $state("");
 	let aguiClient: AGUIClient | null = null;
 	let activeProjectId = $state<string | null>(null);
+	let pendingQuestion = $state<{ question_id: string; questions: string[] } | null>(null);
+	let questionAnswers = $state<string[]>([]);
+	let isSubmittingAnswers = $state(false);
 	let isSidebarCollapsed = $state(false);
 	let isMobile = $state(false);
 	let showVersionHistory = $state(false);
@@ -41,6 +45,9 @@
 	let isExecutingPlan = $state(false);
 	let isCodeViewCollapsed = $state(true);
 	let workspaceFiles = $state<any[]>([]);
+	let lastWrittenFile = $state<{ path: string; ts: number; content?: string; phase?: string } | undefined>(undefined);
+	let _fileRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+	let _workspaceLoadSeq = 0;
 	let specContent = $state<string | null>(null);
 	let isEditingSpec = $state(false);
 	let editedSpecContent = $state("");
@@ -168,6 +175,7 @@
 				message,
 				project_id: activeProjectId,
 				mode: activeProjectId ? "modify" : "generate",
+				context_mode: $settings.defaultContextMode,
 			}),
 		});
 
@@ -236,7 +244,7 @@
 			editedSpecContent = "";
 			isEditingSpec = false;
 			planResponse = null;
-			connectStream(projectId, "auto", "generate", "build");
+			connectStream(projectId, "auto", data.mode || "approved", "build");
 		} else {
 			chatHistory = [
 				...chatHistory,
@@ -262,6 +270,78 @@
 	function handleSaveSpec() {
 		specContent = editedSpecContent;
 		isEditingSpec = false;
+	}
+
+	async function handlePauseAgent(agentId: string) {
+		if (!activeProjectId) return;
+		const name = agentId.replace('agent-', '');
+		try {
+			const res = await fetch(`/api/projects/${activeProjectId}/agents/${name}/pause`, { method: 'POST' });
+			if (!res.ok) console.error('Failed to pause agent:', await res.text());
+		} catch (e) {
+			console.error('Pause error:', e);
+		}
+	}
+
+	async function handleResumeAgent(agentId: string, message: string) {
+		if (!activeProjectId) return;
+		const name = agentId.replace('agent-', '');
+		try {
+			const res = await fetch(`/api/projects/${activeProjectId}/agents/${name}/resume`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ message }),
+			});
+			if (!res.ok) console.error('Failed to resume agent:', await res.text());
+		} catch (e) {
+			console.error('Resume error:', e);
+		}
+	}
+
+	async function handleDirectAgent(agentId: string, message: string) {
+		if (!activeProjectId) return;
+		const name = agentId.replace('agent-', '');
+		try {
+			const res = await fetch(`/api/projects/${activeProjectId}/directive`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ agent: name, message }),
+			});
+			if (!res.ok) console.error('Failed to send directive:', await res.text());
+		} catch (e) {
+			console.error('Directive error:', e);
+		}
+	}
+
+	async function handleStopSwarm() {
+		if (!activeProjectId) return;
+		try {
+			const res = await fetch(`/api/projects/${activeProjectId}/swarm/stop`, { method: 'POST' });
+			if (!res.ok) console.error('Failed to stop swarm:', await res.text());
+		} catch (e) {
+			console.error('Stop swarm error:', e);
+		}
+	}
+
+	async function submitAnswers() {
+		if (!pendingQuestion || !activeProjectId || isSubmittingAnswers) return;
+		isSubmittingAnswers = true;
+		try {
+			await fetch(`/api/projects/${activeProjectId}/answer`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					question_id: pendingQuestion.question_id,
+					answers: questionAnswers,
+				}),
+			});
+			pendingQuestion = null;
+			questionAnswers = [];
+		} catch (e) {
+			console.error('Failed to submit answers:', e);
+		} finally {
+			isSubmittingAnswers = false;
+		}
 	}
 
 	function getPlanMetrics(spec: string) {
@@ -309,6 +389,10 @@
 		}
 
 		aguiClient = new AGUIClient({
+			onOpen: (streamProjectId) => {
+				if (activeProjectId !== streamProjectId) return;
+				warmupAndLoadFiles(streamProjectId);
+			},
 			onRawEvent: (event) => {
 				agentRegistry.dispatchEvent(event);
 				if (
@@ -341,6 +425,9 @@
 			},
 			onError: (event) => {
 				console.error("SSE error event:", event);
+				if (event.content === "Connection error") {
+					return;
+				}
 				isExecutingPlan = false;
 			},
 			onPlanReady: (event) => {
@@ -350,8 +437,41 @@
 				planResponse = "Plan ready for review.";
 				isExecutingPlan = false;
 				agentRegistry.isRunning = false;
+				if (activeProjectId) {
+					loadWorkspaceFiles(activeProjectId);
+				}
+			},
+			onFileCreated: (event) => {
+				const fp = event.data?.file_path as string | undefined;
+				if (fp && activeProjectId === projectId) {
+					lastWrittenFile = {
+						path: fp,
+						ts: Date.now(),
+						content: typeof event.data?.content === "string" ? event.data.content : undefined,
+						phase: typeof event.data?.phase === "string" ? event.data.phase : undefined,
+					};
+				}
+				scheduleFileTreeRefresh(projectId);
+			},
+			onDirectoryCreated: () => {
+				scheduleFileTreeRefresh(projectId);
+			},
+			onQuestion: (event) => {
+				const data = event.data as { question_id: string; questions: string[] } | undefined;
+				if (data?.question_id && Array.isArray(data.questions)) {
+					pendingQuestion = { question_id: data.question_id, questions: data.questions };
+					questionAnswers = new Array(data.questions.length).fill('');
+				}
 			},
 		});
+
+		// Auto-open the code view when a build starts so users see files appear live
+		if (mode === "generate" || mode === "approved" || mode === "modify" || uiMode === "plan") {
+			isCodeViewCollapsed = false;
+		}
+		if (!isCodeViewCollapsed) {
+			warmupAndLoadFiles(projectId);
+		}
 
 		aguiClient.connect(projectId, contextMode, mode, uiMode);
 	}
@@ -521,6 +641,32 @@
 		await restoreProjectSession(projectId);
 	}
 
+	async function deleteProject(projectId: string) {
+		const res = await fetch(`/api/projects/${projectId}`, {
+			method: "DELETE",
+		});
+		if (!res.ok) {
+			const err = await res.json().catch(() => ({}));
+			throw new Error(err.error || "Failed to delete project");
+		}
+		// If the deleted project was active, clear state
+		if (activeProjectId === projectId) {
+			activeProjectId = null;
+			localStorage.removeItem("chorus.activeProjectId");
+			if (aguiClient) {
+				aguiClient.disconnect();
+			}
+			resetProjectViewState();
+			chatHistory = [
+				{
+					role: "assistant",
+					content:
+						"Welcome! I can generate full Spring Boot + Svelte projects from your description. What would you like to build?",
+				},
+			];
+		}
+	}
+
 	async function warmupAndLoadFiles(projectId: string) {
 		try {
 			const warmupRes = await fetch(
@@ -562,15 +708,32 @@
 	}
 
 	async function loadWorkspaceFiles(projectId: string) {
+		const requestSeq = ++_workspaceLoadSeq;
 		try {
 			const res = await fetch(`/api/workspace/${projectId}/files`);
+			if (requestSeq !== _workspaceLoadSeq || activeProjectId !== projectId) {
+				return;
+			}
 			if (res.ok) {
 				const data = await res.json();
+				if (requestSeq !== _workspaceLoadSeq || activeProjectId !== projectId) {
+					return;
+				}
 				workspaceFiles = data.files || [];
 			}
 		} catch (e) {
+			if (requestSeq !== _workspaceLoadSeq || activeProjectId !== projectId) {
+				return;
+			}
 			console.error("Failed to load workspace files:", e);
 		}
+	}
+
+	function scheduleFileTreeRefresh(projectId: string) {
+		if (_fileRefreshTimer) clearTimeout(_fileRefreshTimer);
+		_fileRefreshTimer = setTimeout(() => {
+			if (activeProjectId === projectId) loadWorkspaceFiles(projectId);
+		}, 600);
 	}
 
 	function toggleCodeView() {
@@ -602,10 +765,19 @@
 			},
 		];
 
+		const savedProjectId = localStorage.getItem("chorus.activeProjectId");
+		if (savedProjectId) {
+			activeProjectId = savedProjectId;
+			void restoreProjectSession(savedProjectId);
+		}
+
 		return () => window.removeEventListener("resize", checkMobile);
 	});
 
 	onDestroy(() => {
+		if (_fileRefreshTimer) {
+			clearTimeout(_fileRefreshTimer);
+		}
 		if (aguiClient) {
 			aguiClient.disconnect();
 		}
@@ -621,6 +793,7 @@
 		onToggle={() => (isSidebarCollapsed = !isSidebarCollapsed)}
 		onSelect={switchProject}
 		onNew={startNewProject}
+		onDelete={deleteProject}
 	/>
 
 	<!-- Right: Main Content -->
@@ -751,6 +924,15 @@
 					</div>
 				{/if}
 				{#if isRunning}
+					<button
+						type="button"
+						onclick={handleStopSwarm}
+						class="flex items-center gap-1.5 rounded-full bg-rose-500/10 border border-rose-500/20 px-3 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer"
+						title="Stop all running agents"
+					>
+						<Square class="h-3 w-3 fill-current" />
+						<span>Stop</span>
+					</button>
 					<div
 						class="flex items-center gap-2 rounded-full bg-primary/10 border border-primary/20 px-3 py-1"
 					>
@@ -1216,6 +1398,10 @@
 								agents={allAgents}
 								selectedId={agentRegistry.selectedAgentId}
 								onSelect={(id) => agentRegistry.selectAgent(id)}
+								projectId={activeProjectId}
+								onPause={handlePauseAgent}
+								onResume={handleResumeAgent}
+								onDirect={handleDirectAgent}
 							/>
 						{/if}
 
@@ -1230,6 +1416,43 @@
 						{/if}
 					</div>
 				</ScrollArea>
+
+				<!-- Question Card — shown when an agent calls ask_user() -->
+				{#if pendingQuestion}
+					<div class="mx-4 mb-3 shrink-0 flex justify-center">
+						<div class="w-full max-w-3xl rounded-2xl border border-white/50 bg-white/40 backdrop-blur-xl shadow-lg p-5">
+							<p class="text-sm font-semibold text-foreground mb-3">
+								The agent needs a few answers to continue:
+							</p>
+							<div class="flex flex-col gap-3">
+								{#each pendingQuestion.questions as question, i}
+									<div class="flex flex-col gap-1">
+										<label class="text-sm text-muted-foreground" for={`agent-question-${i}`}>{question}</label>
+										<Input
+											id={`agent-question-${i}`}
+											value={questionAnswers[i]}
+											oninput={(e) => { questionAnswers[i] = e.currentTarget.value; }}
+											placeholder="Your answer…"
+											class="h-10 border border-white/60 bg-white/60 backdrop-blur-sm rounded-xl px-3 text-sm focus-visible:ring-1 focus-visible:ring-primary/40"
+										/>
+									</div>
+								{/each}
+							</div>
+							<div class="mt-4 flex justify-end">
+								<Button
+									onclick={submitAnswers}
+									disabled={isSubmittingAnswers || questionAnswers.some((a) => !a.trim())}
+									class="rounded-xl px-5 h-9 text-sm"
+								>
+									{#if isSubmittingAnswers}
+										<Loader2 class="h-4 w-4 animate-spin mr-2" />
+									{/if}
+									Submit Answers
+								</Button>
+							</div>
+						</div>
+					</div>
+				{/if}
 
 				<!-- Input Area -->
 				<div class="mt-4 mb-8 px-4 shrink-0 flex justify-center">
@@ -1323,6 +1546,7 @@
 						projectId={activeProjectId}
 						collapsed={isCodeViewCollapsed}
 						onToggleCollapse={toggleCodeView}
+						{lastWrittenFile}
 					/>
 				</aside>
 			{/if}

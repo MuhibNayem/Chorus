@@ -3,7 +3,17 @@
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { Badge } from '$lib/components/ui/badge';
 	import { cn } from '$lib/utils';
-	import { Plus, History, Loader2, Search, PanelLeftClose, PanelLeftOpen, Sparkles, ArrowUpRight, Layers3 } from 'lucide-svelte';
+	import Plus from '@lucide/svelte/icons/plus';
+	import History from '@lucide/svelte/icons/history';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import Search from '@lucide/svelte/icons/search';
+	import PanelLeftClose from '@lucide/svelte/icons/panel-left-close';
+	import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
+	import Sparkles from '@lucide/svelte/icons/sparkles';
+	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
+	import Layers3 from '@lucide/svelte/icons/layers-3';
+	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
 
 	let { 
 		activeProjectId, 
@@ -11,7 +21,8 @@
 		isMobile = false,
 		onToggle,
 		onSelect, 
-		onNew 
+		onNew,
+		onDelete
 	}: { 
 		activeProjectId: string | null; 
 		isCollapsed: boolean;
@@ -19,6 +30,7 @@
 		onToggle: () => void;
 		onSelect: (id: string) => void;
 		onNew: () => void | Promise<void>;
+		onDelete: (id: string) => void | Promise<void>;
 	} = $props();
 
 	let projects = $state<any[]>([]);
@@ -26,6 +38,8 @@
 	let loading = $state(false);
 	let hasMore = $state(true);
 	let offset = $state(0);
+	let deletingId = $state<string | null>(null);
+	let confirmDeleteId = $state<string | null>(null);
 	const limit = 20;
 	const avatarTones = [
 		'from-sky-500/90 to-cyan-500/80 text-white',
@@ -96,6 +110,27 @@
 			await onNew();
 			await fetchProjects(true);
 		})();
+	}
+
+	async function handleDeleteProject(projectId: string) {
+		if (confirmDeleteId !== projectId) {
+			confirmDeleteId = projectId;
+			return;
+		}
+		confirmDeleteId = null;
+		deletingId = projectId;
+		try {
+			await onDelete(projectId);
+			projects = projects.filter((p) => p.id !== projectId);
+		} catch (e) {
+			console.error('Failed to delete project:', e);
+		} finally {
+			deletingId = null;
+		}
+	}
+
+	function cancelDelete() {
+		confirmDeleteId = null;
 	}
 
 	function hashString(value: string): number {
@@ -241,42 +276,79 @@
 							{/if}
 						</button>
 					{:else}
-						<button
-							onclick={() => onSelect(project.id)}
-						style={`animation-delay: ${index * 40}ms`}
-						class={cn(
-							"sidebar-row group relative mb-2 w-full overflow-hidden rounded-2xl border p-3 text-left transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/60 hover:shadow-[0_12px_26px_rgba(15,23,42,0.08)]",
-							activeProjectId === project.id ? "border-white/70 bg-white/75 shadow-[0_14px_28px_rgba(15,23,42,0.10)]" : "border-white/30 bg-white/30"
-						)}
+						<div
+							class={cn(
+								"sidebar-row group relative mb-2 w-full overflow-hidden rounded-2xl border p-3 text-left transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/60 hover:shadow-[0_12px_26px_rgba(15,23,42,0.08)]",
+								activeProjectId === project.id ? "border-white/70 bg-white/75 shadow-[0_14px_28px_rgba(15,23,42,0.10)]" : "border-white/30 bg-white/30"
+							)}
+							style={`animation-delay: ${index * 40}ms`}
 						>
-							<div class="min-w-0 flex-1">
-								<div class="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/80 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100"></div>
-								<div class="flex items-center justify-between gap-2 overflow-hidden">
-									<span class={cn(
-										"truncate text-[13px] font-semibold tracking-tight transition-colors",
-										activeProjectId === project.id ? "text-slate-900" : "text-slate-700"
-									)}>
-										{project.name || 'Untitled'}
-									</span>
-									<Badge variant={project.status === 'complete' ? 'default' : 'outline'} class="text-[9px] h-4 px-1.5 uppercase leading-none font-bold shrink-0 rounded-full">
-										{project.status}
-									</Badge>
+							<button
+								onclick={() => onSelect(project.id)}
+								class="w-full text-left"
+							>
+								<div class="min-w-0 flex-1">
+									<div class="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/80 to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100"></div>
+									<div class="flex items-center justify-between gap-2 overflow-hidden">
+										<span class={cn(
+											"truncate text-[13px] font-semibold tracking-tight transition-colors",
+											activeProjectId === project.id ? "text-slate-900" : "text-slate-700"
+										)}>
+											{project.name || 'Untitled'}
+										</span>
+										<Badge variant={project.status === 'complete' ? 'default' : 'outline'} class="text-[9px] h-4 px-1.5 uppercase leading-none font-bold shrink-0 rounded-full">
+											{project.status}
+										</Badge>
+									</div>
+									<p class="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground/60">
+										{project.spec?.message || 'No description'}
+									</p>
 								</div>
-								<p class="mt-1 line-clamp-2 text-[10px] leading-4 text-muted-foreground/60">
-									{project.spec?.message || 'No description'}
-								</p>
-							</div>
-							<div class="mt-2 flex items-center justify-between opacity-0 transition-all duration-200 group-hover:translate-y-0.5 group-hover:opacity-100">
+							</button>
+							<div class="mt-2 flex items-center justify-between">
 								<span class="text-[9px] text-muted-foreground/45">
 									{new Date(project.updated_at).toLocaleDateString()}
 								</span>
-							<ArrowUpRight class="h-3 w-3 text-primary/60 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-						</div>
+								<div class="flex items-center gap-1">
+									{#if confirmDeleteId === project.id}
+										<div class="flex items-center gap-1 animate-in fade-in zoom-in duration-200">
+											<span class="text-[9px] font-semibold text-rose-600">Confirm?</span>
+											<button
+												onclick={() => handleDeleteProject(project.id)}
+												class="flex h-6 w-6 items-center justify-center rounded-lg bg-rose-500 text-white shadow-sm hover:bg-rose-600 transition-colors"
+												title="Confirm delete"
+												>
+												{#if deletingId === project.id}
+													<Loader2 class="h-3 w-3 animate-spin" />
+												{:else}
+													<Trash2 class="h-3 w-3" />
+												{/if}
+											</button>
+											<button
+												onclick={cancelDelete}
+												class="flex h-6 w-6 items-center justify-center rounded-lg bg-white/70 text-muted-foreground shadow-sm hover:bg-white transition-colors"
+												title="Cancel"
+												>
+												<span class="text-[10px] font-bold">×</span>
+											</button>
+										</div>
+									{:else}
+										<button
+											onclick={() => handleDeleteProject(project.id)}
+											class="flex h-6 w-6 items-center justify-center rounded-lg text-muted-foreground/40 opacity-0 transition-all duration-200 hover:bg-rose-50 hover:text-rose-500 group-hover:opacity-100"
+											title="Delete project"
+											>
+											<Trash2 class="h-3 w-3" />
+										</button>
+									{/if}
+									<ArrowUpRight class="h-3 w-3 text-primary/60 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+								</div>
+							</div>
 
-						{#if activeProjectId === project.id}
-							<div class="absolute left-0 top-3 h-[calc(100%-1.5rem)] w-1 rounded-r-full bg-gradient-to-b from-cyan-400 via-sky-500 to-teal-400"></div>
-						{/if}
-					</button>
+							{#if activeProjectId === project.id}
+								<div class="absolute left-0 top-3 h-[calc(100%-1.5rem)] w-1 rounded-r-full bg-gradient-to-b from-cyan-400 via-sky-500 to-teal-400"></div>
+							{/if}
+						</div>
 				{/if}
 			{/each}
 

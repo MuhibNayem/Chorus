@@ -3,24 +3,22 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import {
-		X,
-		History,
-		Clock,
-		Loader2,
-		RotateCcw,
-		Eye,
-		ChevronDown,
-		Bookmark,
-		BookmarkCheck,
-		FileCode,
-		Database,
-		Users,
-		Folder,
-		File,
-		FolderOpen,
-		ChevronRight
-	} from 'lucide-svelte';
+	import X from '@lucide/svelte/icons/x';
+	import History from '@lucide/svelte/icons/history';
+	import Clock from '@lucide/svelte/icons/clock';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import RotateCcw from '@lucide/svelte/icons/rotate-ccw';
+	import Eye from '@lucide/svelte/icons/eye';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import Bookmark from '@lucide/svelte/icons/bookmark';
+	import BookmarkCheck from '@lucide/svelte/icons/bookmark-check';
+	import FileCode from '@lucide/svelte/icons/file-code';
+	import Database from '@lucide/svelte/icons/database';
+	import Users from '@lucide/svelte/icons/users';
+	import Folder from '@lucide/svelte/icons/folder';
+	import File from '@lucide/svelte/icons/file';
+	import FolderOpen from '@lucide/svelte/icons/folder-open';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 
 	let {
 		projectId,

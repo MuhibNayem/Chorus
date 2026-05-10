@@ -5,10 +5,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# Install git for workspace snapshots (Phase 1 rollback/recovery)
+# Install curl for docker-compose healthchecks
+# Install docker CLI so Celery workers can spawn verification containers (sandbox builds)
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://download.docker.com/linux/static/stable/$(uname -m)/docker-26.1.4.tgz | tar xz -C /tmp && \
+    cp /tmp/docker/docker /usr/local/bin/docker && \
+    rm -rf /tmp/docker
+
 WORKDIR /app/backend
 
 COPY pyproject.toml ./
 COPY src ./src
+COPY scripts ./scripts
+RUN chmod +x scripts/*.sh
 
 RUN for attempt in 1 2 3; do \
       pip install --no-cache-dir --retries 10 --timeout 120 . && exit 0; \

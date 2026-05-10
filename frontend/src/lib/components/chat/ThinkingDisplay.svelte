@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { cn } from '$lib/utils';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Brain, ChevronDown, ChevronRight } from 'lucide-svelte';
+	import Brain from '@lucide/svelte/icons/brain';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
+	import ChevronRight from '@lucide/svelte/icons/chevron-right';
 
 	let { thinking, agentName = 'Agent' }: { thinking: string; agentName?: string } = $props();
 

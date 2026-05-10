@@ -26,6 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 from .swarm.agents import AgentSwarm, AGENT_SYSTEM_PROMPTS
+from .blackboard.event_log import get_project_events_since
 from .blackboard.redis_blackboard import RedisBlackboard
 from .blackboard.database import Database
 from .rag.pipeline import RAGPipeline, ingest_knowledge_base, KNOWLEDGE_BASE
@@ -36,6 +37,24 @@ blackboard = RedisBlackboard()
 database = Database()
 rag_pipeline = RAGPipeline()
 storage = MinioStorage()
+
+
+def _sse_message(event: dict) -> dict:
+    payload = json.dumps(event, default=str)
+    message = {"data": payload}
+    event_id = event.get("event_id")
+    if event_id is not None:
+        message["id"] = str(event_id)
+    return message
+
+
+def _parse_last_event_id(raw_value: str | None) -> int | None:
+    if not raw_value:
+        return None
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return None
 
 
 @asynccontextmanager
@@ -159,7 +178,7 @@ def _normalize_context_mode(context_mode: str) -> str:
 
 
 def _normalize_run_mode(run_mode: str, project_id: str | None = None) -> str:
-    if run_mode in ("generate", "modify"):
+    if run_mode in ("generate", "modify", "approved"):
         return run_mode
     return "modify" if project_id else "generate"
 
@@ -271,15 +290,48 @@ def _create_workspace_checkpoint(project_id: str, checkpoint_id: str) -> tuple[s
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_path = checkpoint_dir / f"{checkpoint_id}.zip"
 
+    # Pre-flight disk space check — avoid writing a massive zip into a full tmpfs
+    try:
+        stat = os.statvfs(checkpoint_dir)
+        avail_mb = (stat.f_bavail * stat.f_frsize) / (1024 * 1024)
+        if avail_mb < 100:
+            logger.warning(
+                "[checkpoint] Low disk space on checkpoint dir: %.1f MB available. "
+                "Skipping checkpoint creation to avoid 'No space left on device'.",
+                avail_mb,
+            )
+            return str(checkpoint_path), 0, 0
+    except Exception:
+        pass
+
+    # Exclude directories that bloat checkpoints without adding value:
+    # - .git          : version history, often 100x larger than source code
+    # - node_modules  : dependency tree (not in workspace for this project, but
+    #                   defensive for future stacks)
+    # - .venv, venv   : Python virtual environments
+    # - __pycache__   : compiled Python bytecode
+    EXCLUDED_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache"}
     file_count = 0
     with zipfile.ZipFile(checkpoint_path, "w", zipfile.ZIP_DEFLATED) as zf:
         if workspace.exists():
             for file_path in workspace.rglob("*"):
-                if file_path.is_file() and not file_path.name.endswith(".zip"):
-                    zf.write(file_path, file_path.relative_to(workspace))
-                    file_count += 1
+                if not file_path.is_file():
+                    continue
+                # Skip zip files (packager output, previous checkpoints)
+                if file_path.name.endswith(".zip"):
+                    continue
+                # Skip files inside excluded directories
+                try:
+                    rel_parts = file_path.relative_to(workspace).parts
+                    if any(part in EXCLUDED_DIRS for part in rel_parts):
+                        continue
+                except ValueError:
+                    continue
+                zf.write(file_path, file_path.relative_to(workspace))
+                file_count += 1
 
-    return str(checkpoint_path), file_count, checkpoint_path.stat().st_size
+    size_bytes = checkpoint_path.stat().st_size if checkpoint_path.exists() else 0
+    return str(checkpoint_path), file_count, size_bytes
 
 
 def _safe_extract_checkpoint(snapshot_path: Path, workspace: Path):
@@ -338,10 +390,41 @@ async def create_project_checkpoint(
             snapshot_path=object_name,
             metadata=checkpoint_metadata,
         )
+
+        # 5. Clean up local checkpoint files to prevent tmpfs bloat.
+        #    MinIO is the source of truth; local copies are ephemeral staging.
+        _cleanup_old_local_checkpoints(project_id, keep_recent=3)
+
         return checkpoint_id
     except Exception as e:
         logger.warning(f"[checkpoint] Failed to create checkpoint for {project_id}: {e}")
         return None
+
+
+def _cleanup_old_local_checkpoints(project_id: str, keep_recent: int = 3) -> None:
+    """Delete local checkpoint ZIPs for a project, keeping only the N most recent.
+
+    Local checkpoints are ephemeral staging copies. MinIO is the durable
+    source of truth. This prevents the 256 MB tmpfs from filling up.
+    """
+    checkpoint_dir = CHECKPOINT_BASE / project_id
+    if not checkpoint_dir.exists():
+        return
+
+    try:
+        zips = sorted(
+            (p for p in checkpoint_dir.glob("*.zip") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for old_zip in zips[keep_recent:]:
+            try:
+                old_zip.unlink()
+                logger.info("[checkpoint] Deleted old local checkpoint: %s", old_zip.name)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 async def _capture_ai_context(project_id: str) -> dict:
@@ -437,6 +520,8 @@ async def start_swarm_background(
     from .swarm.agents import AgentSwarm
     import hashlib
 
+    is_modification = run_mode == "modify"
+
     # Ensure connections are active (especially for Celery workers)
     if not getattr(blackboard, "_redis", None):
         await blackboard.connect()
@@ -463,17 +548,24 @@ async def start_swarm_background(
         base_tasks = f"Update the existing project specification for this modification: {user_message}"
         task_definitions = {
             "rootdep": [base_tasks],
-            "backend": [f"Modify the existing Spring Boot backend for: {user_message}"],
-            "frontend": [f"Modify the existing Svelte 5 frontend for: {user_message}"],
+            "backend": [f"Modify the existing backend for: {user_message}"],
+            "frontend": [f"Modify the existing frontend for: {user_message}"],
             "devops": [f"Update deployment configuration only if needed for: {user_message}"],
             "packager": [f"Verify, repackage, and upload the modified project: {user_message}"],
+        }
+    elif run_mode == "approved":
+        task_definitions = {
+            "backend": [f"Implement backend from the approved SPEC.md for: {user_message}"],
+            "frontend": [f"Implement frontend from the approved SPEC.md for: {user_message}"],
+            "devops": [f"Create deployment configuration from the approved SPEC.md and generated manifests for: {user_message}"],
+            "packager": [f"Verify, package, and upload the approved project build: {user_message}"],
         }
     else:
         base_tasks = f"Parse and analyze the project requirement: {user_message}"
         task_definitions = {
             "rootdep": [base_tasks],
-            "backend": [f"Generate Spring Boot backend for: {user_message}"],
-            "frontend": [f"Generate Svelte 5 frontend for: {user_message}"],
+            "backend": [f"Generate backend for: {user_message}"],
+            "frontend": [f"Generate frontend for: {user_message}"],
             "devops": [f"Create Docker configuration for: {user_message}"],
             "packager": [f"Package the project: {user_message}"],
         }
@@ -493,7 +585,7 @@ async def start_swarm_background(
             spec={"message": user_message, "run_mode": run_mode, "context_mode": context_mode},
             status="running",
         )
-        if run_mode == "modify":
+        if is_modification:
             await create_project_checkpoint(
                 project_id,
                 "Before modification",
@@ -513,10 +605,16 @@ async def start_swarm_background(
         )
         await database.update_project_status(project_id, "running")
         result = await swarm.execute_parallel(task_definitions)
+        if isinstance(result, dict) and result.get("status") == "error":
+            raise RuntimeError(result.get("error", "Swarm execution failed"))
+        if isinstance(result, dict) and result.get("status") == "stopped":
+            await database.update_project_status(project_id, "stopped")
+            logger.info(f"[BG] Swarm stopped by user for project {project_id}")
+            return
         await database.update_project_status(project_id, "complete")
         checkpoint_id = await create_project_checkpoint(
             project_id,
-            "Generated project" if run_mode == "generate" else "Modified project",
+            "Modified project" if is_modification else "Generated project",
             run_mode,
             user_message,
             {"phase": "after", "result": result},
@@ -542,7 +640,7 @@ async def start_swarm_background(
             message_id=str(uuid.uuid4()),
             project_id=project_id,
             role="assistant",
-            content="Project generation finished" if run_mode == "generate" else "Project modification finished",
+            content="Project modification finished" if is_modification else "Project generation finished",
             metadata={"run_mode": run_mode, "ui_mode": ui_mode, "checkpoint_id": checkpoint_id},
         )
         await blackboard.set_project_state(
@@ -573,7 +671,7 @@ async def start_swarm_background(
             project_id,
             "system",
             "complete",
-            "Project generation finished" if run_mode == "generate" else "Project modification finished",
+            "Project modification finished" if is_modification else "Project generation finished",
             {"run_mode": run_mode, "checkpoint_id": checkpoint_id},
         )
         logger.info(f"[BG] Swarm completed for project: {project_id}")
@@ -653,6 +751,8 @@ async def start_plan_swarm_background(
         await database.update_project_status(project_id, "planning")
 
         result = await swarm.execute_parallel(task_definitions)
+        if isinstance(result, dict) and result.get("status") == "error":
+            raise RuntimeError(result.get("error", "Plan generation failed"))
 
         spec_content = ""
         if spec_path.exists():
@@ -729,6 +829,7 @@ async def event_generator(
     context_mode: str = "auto",
     run_mode: str = "generate",
     ui_mode: str = "build",
+    since_event_id: int | None = None,
 ) -> AsyncGenerator[str, None]:
     logger.info(f"[SSE] Starting event generator for project: {project_id}")
     context_mode = _normalize_context_mode(context_mode)
@@ -737,12 +838,12 @@ async def event_generator(
 
     project_state = await blackboard.get_project_state(project_id)
     if project_state and project_state.get("status") == "complete" and run_mode != "modify":
-        yield json.dumps({
+        yield _sse_message({
             "type": "RunFinished",
             "content": "Project already completed",
             "timestamp": int(datetime.now().timestamp() * 1000),
             "data": {"status": "success", "project_id": project_id}
-        }) + "\n"
+        })
         return
 
     if project_state and project_state.get("status") == "running":
@@ -772,22 +873,34 @@ async def event_generator(
                 )
             )
 
-    yield json.dumps({
-        "type": "RunStarted",
-        "content": "Starting project modification" if run_mode == "modify" else "Starting project generation",
-        "timestamp": int(datetime.now().timestamp() * 1000),
-        "data": {
-            "status": "started",
-            "project_id": project_id,
-            "context_mode": context_mode,
-            "run_mode": run_mode,
-        }
-    }) + "\n"
-
     try:
         pubsub = blackboard._redis.pubsub()
         channel = f"project:{project_id}:events"
         await pubsub.subscribe(channel)
+
+        replayed_running_events = False
+        if since_event_id is not None:
+            replayed_events = await get_project_events_since(
+                blackboard._redis,
+                project_id,
+                after_event_id=since_event_id,
+            )
+            for replay_event in replayed_events:
+                replayed_running_events = True
+                yield _sse_message(replay_event)
+
+        if not replayed_running_events and not (project_state and project_state.get("status") == "running") and ui_mode != "plan":
+            yield _sse_message({
+                "type": "RunStarted",
+                "content": "Starting project modification" if run_mode == "modify" else "Starting project generation",
+                "timestamp": int(datetime.now().timestamp() * 1000),
+                "data": {
+                    "status": "started",
+                    "project_id": project_id,
+                    "context_mode": context_mode,
+                    "run_mode": run_mode,
+                }
+            })
 
         async for message in pubsub.listen():
             if message["type"] == "message":
@@ -804,7 +917,7 @@ async def event_generator(
                 if event_type in ("complete", "done"):
                     agent_name = data.get("agent_name", "")
                     if agent_name == "system":
-                        yield json.dumps({
+                        yield _sse_message({
                             "type": "download_ready",
                             "agent_id": "system",
                             "agent_name": "system",
@@ -816,9 +929,9 @@ async def event_generator(
                                 "project_name": project_id[:8],
                                 "project_id": project_id,
                             }
-                        }) + "\n"
+                        })
 
-                        yield json.dumps({
+                        yield _sse_message({
                             "type": "RunFinished",
                             "content": "Project modification complete!" if run_mode == "modify" else "Project generation complete!",
                             "timestamp": int(datetime.now().timestamp() * 1000),
@@ -828,25 +941,25 @@ async def event_generator(
                                 "run_mode": run_mode,
                                 "checkpoint_id": event_data.get("checkpoint_id"),
                             }
-                        }) + "\n"
+                        })
                         break
                     else:
-                        yield json.dumps({
+                        yield _sse_message({
                             "type": "complete",
                             "agent_id": data.get("agent_id", "system"),
                             "agent_name": agent_name,
                             "content": content,
                             "timestamp": int(datetime.now().timestamp() * 1000),
                             "data": event_data
-                        }) + "\n"
+                        })
                         continue
 
                 if event_type == "error":
-                    yield json.dumps({
+                    yield _sse_message({
                         "type": "RunError",
                         "content": data.get("content", "Error occurred"),
                         "timestamp": int(datetime.now().timestamp() * 1000),
-                    }) + "\n"
+                    })
                     break
 
                 if event_type == "plan_ready":
@@ -854,7 +967,7 @@ async def event_generator(
                     logger.info(
                         f"[SSE] PlanReady for {project_id}: spec_length={len(spec_content)}"
                     )
-                    yield json.dumps({
+                    yield _sse_message({
                         "type": "PlanReady",
                         "content": "SPEC.md generated. Review and approve to begin implementation.",
                         "timestamp": int(datetime.now().timestamp() * 1000),
@@ -864,7 +977,7 @@ async def event_generator(
                             "project_id": project_id,
                             "project_status": "plan_ready",
                         }
-                    }) + "\n"
+                    })
                     continue
 
                 if event_type == "text" and content:
@@ -885,24 +998,24 @@ async def event_generator(
                     except Exception as save_err:
                         logger.warning(f"[SSE] Failed to persist message: {save_err}")
 
-                yield json.dumps({
+                yield _sse_message({
                     "type": event_type,
                     "agent_id": data.get("agent_id", "system"),
                     "agent_name": agent_name,
                     "content": content,
                     "timestamp": int(datetime.now().timestamp() * 1000),
                     "data": event_data
-                }) + "\n"
+                })
 
     except asyncio.CancelledError:
         logger.info(f"[SSE] SSE connection cancelled")
     except Exception as e:
         logger.error(f"[SSE] Error: {e}")
-        yield json.dumps({
+        yield _sse_message({
             "type": "RunError",
             "content": str(e),
             "timestamp": int(datetime.now().timestamp() * 1000),
-        }) + "\n"
+        })
     finally:
         try:
             await pubsub.unsubscribe(channel)
@@ -1087,7 +1200,7 @@ async def approve_plan(request: ApproveRequest):
     current_spec.update(
         {
             "message": user_message,
-            "run_mode": "generate",
+            "run_mode": "approved",
             "context_mode": "auto",
             "approved_spec_content": request.spec_content or current_spec.get("spec_content"),
         }
@@ -1098,7 +1211,7 @@ async def approve_plan(request: ApproveRequest):
     await database.update_project_status(project_id, "pending")
     await blackboard.set_project_state(
         project_id,
-        {"status": "pending", "run_mode": "generate", "context_mode": "auto"},
+        {"status": "pending", "run_mode": "approved", "context_mode": "auto"},
     )
 
     # 4. Trigger the implementation swarm via Celery, or fall back in-process.
@@ -1110,7 +1223,7 @@ async def approve_plan(request: ApproveRequest):
             project_id=project_id,
             user_message=user_message,
             context_mode="auto",
-            run_mode="generate",
+            run_mode="approved",
             ui_mode="build"
         )
     else:
@@ -1123,7 +1236,7 @@ async def approve_plan(request: ApproveRequest):
                 project_id=project_id,
                 user_message=user_message,
                 context_mode="auto",
-                run_mode="generate",
+                run_mode="approved",
                 ui_mode="build",
             )
         )
@@ -1131,8 +1244,201 @@ async def approve_plan(request: ApproveRequest):
     return JSONResponse({
         "project_id": project_id,
         "status": "starting",
+        "mode": "approved",
+        "context_mode": "auto",
         "message": "Plan approved. Implementation swarm started.",
     })
+
+
+class AnswerRequest(BaseModel):
+    question_id: str
+    answers: list[str]
+
+
+class DirectiveRequest(BaseModel):
+    agent: str  # backend | frontend | devops | packager
+    message: str
+
+
+@app.post("/api/projects/{project_id}/directive")
+async def send_directive(project_id: str, request: DirectiveRequest):
+    """Send a mid-run directive to a running specialist agent.
+
+    The agent picks it up non-blocking at its next verify_progress checkpoint.
+    Only one directive per agent is queued at a time; sending a new one
+    overwrites any unread previous directive.
+    """
+    import redis.asyncio as _redis
+    import os as _os
+    from .swarm.tools.user_directive import directive_redis_key
+
+    VALID_AGENTS = {"backend", "frontend", "devops", "packager"}
+    if request.agent not in VALID_AGENTS:
+        return JSONResponse(
+            {"status": "error", "error": f"Unknown agent '{request.agent}'. Valid: {sorted(VALID_AGENTS)}"},
+            status_code=400,
+        )
+    if not request.message.strip():
+        return JSONResponse({"status": "error", "error": "message must not be empty"}, status_code=400)
+
+    redis_url = _os.getenv("REDIS_URL", "redis://localhost:6379")
+    r: _redis.Redis | None = None
+    try:
+        r = _redis.from_url(redis_url, decode_responses=True)
+        key = directive_redis_key(project_id, request.agent)
+        # SETEX: overwrites any pending directive; 1h TTL so stale directives don't linger
+        await r.setex(key, 3600, request.message.strip())
+
+        # Publish SSE so the frontend can show "directive queued" immediately
+        channel = f"project:{project_id}:events"
+        event_payload = __import__("json").dumps({
+            "type": "directive_queued",
+            "data": {"agent": request.agent, "message": request.message.strip()},
+        })
+        await r.publish(channel, event_payload)
+    finally:
+        if r is not None:
+            await r.aclose()
+
+    return JSONResponse({"status": "queued", "agent": request.agent})
+
+
+@app.post("/api/projects/{project_id}/swarm/stop")
+async def stop_swarm(project_id: str):
+    """Stop the entire swarm for a project.
+
+    Sets a Redis flag that execute_parallel checks between agent steps and
+    poll_user_directive checks inside any blocked pause loop.
+    Works for both in-process and Celery execution paths.
+    """
+    import redis.asyncio as _redis
+    import os as _os
+    import json as _json
+    from .swarm.tools.user_directive import swarm_stop_redis_key
+
+    redis_url = _os.getenv("REDIS_URL", "redis://localhost:6379")
+    r: _redis.Redis | None = None
+    try:
+        r = _redis.from_url(redis_url, decode_responses=True)
+        await r.setex(swarm_stop_redis_key(project_id), 86400, "1")
+        channel = f"project:{project_id}:events"
+        await r.publish(channel, _json.dumps({
+            "type": "swarm_stop_requested",
+            "data": {"project_id": project_id},
+        }))
+    finally:
+        if r is not None:
+            await r.aclose()
+
+    return JSONResponse({"status": "stop_requested"})
+
+
+class PauseRequest(BaseModel):
+    message: str = ""
+
+
+class ResumeRequest(BaseModel):
+    message: str
+
+
+VALID_PAUSABLE_AGENTS = {"backend", "frontend", "devops", "packager"}
+
+
+@app.post("/api/projects/{project_id}/agents/{agent_name}/pause")
+async def pause_agent(project_id: str, agent_name: str, request: PauseRequest):
+    """Pause a running agent at its next checkpoint.
+
+    The agent blocks until the user calls /resume or the pause times out (30 min).
+    Sends a __PAUSE__ directive via the same Redis key as poll_user_directive.
+    """
+    import redis.asyncio as _redis
+    import os as _os
+    import json as _json
+    from .swarm.tools.user_directive import directive_redis_key, PAUSE_PREFIX
+
+    if agent_name not in VALID_PAUSABLE_AGENTS:
+        return JSONResponse(
+            {"status": "error", "error": f"Unknown agent '{agent_name}'"},
+            status_code=400,
+        )
+
+    redis_url = _os.getenv("REDIS_URL", "redis://localhost:6379")
+    r: _redis.Redis | None = None
+    try:
+        r = _redis.from_url(redis_url, decode_responses=True)
+        value = f"{PAUSE_PREFIX} {request.message.strip()}" if request.message.strip() else f"{PAUSE_PREFIX} User requested pause"
+        await r.setex(directive_redis_key(project_id, agent_name), 3600, value)
+        channel = f"project:{project_id}:events"
+        await r.publish(channel, _json.dumps({
+            "type": "pause_requested",
+            "data": {"agent": agent_name, "message": request.message},
+        }))
+    finally:
+        if r is not None:
+            await r.aclose()
+
+    return JSONResponse({"status": "pause_requested", "agent": agent_name})
+
+
+@app.post("/api/projects/{project_id}/agents/{agent_name}/resume")
+async def resume_agent(project_id: str, agent_name: str, request: ResumeRequest):
+    """Resume a paused agent with optional user input.
+
+    Writes to the resume key that poll_user_directive polls while blocked.
+    The agent receives the user's input and continues its work.
+    """
+    import redis.asyncio as _redis
+    import os as _os
+    import json as _json
+    from .swarm.tools.user_directive import resume_redis_key
+
+    if agent_name not in VALID_PAUSABLE_AGENTS:
+        return JSONResponse(
+            {"status": "error", "error": f"Unknown agent '{agent_name}'"},
+            status_code=400,
+        )
+    if not request.message.strip():
+        return JSONResponse({"status": "error", "error": "message must not be empty"}, status_code=400)
+
+    redis_url = _os.getenv("REDIS_URL", "redis://localhost:6379")
+    r: _redis.Redis | None = None
+    try:
+        r = _redis.from_url(redis_url, decode_responses=True)
+        await r.setex(resume_redis_key(project_id, agent_name), 3600, request.message.strip())
+        channel = f"project:{project_id}:events"
+        await r.publish(channel, _json.dumps({
+            "type": "resume_requested",
+            "data": {"agent": agent_name, "message": request.message},
+        }))
+    finally:
+        if r is not None:
+            await r.aclose()
+
+    return JSONResponse({"status": "resume_requested", "agent": agent_name})
+
+
+@app.post("/api/projects/{project_id}/answer")
+async def submit_answer(project_id: str, request: AnswerRequest):
+    """Receive user answers for a pending ask_user() question from an agent.
+
+    The agent polls the Redis key written here.  The key expires after 1 hour.
+    """
+    import json as _json
+    import redis.asyncio as _redis
+    import os as _os
+
+    redis_url = _os.getenv("REDIS_URL", "redis://localhost:6379")
+    answer_key = f"project:{project_id}:questions:{request.question_id}:answers"
+
+    r: _redis.Redis | None = None
+    try:
+        r = _redis.from_url(redis_url, decode_responses=True)
+        await r.set(answer_key, _json.dumps(request.answers), ex=3600)
+    finally:
+        if r is not None:
+            await r.aclose()
+
+    return JSONResponse({"status": "accepted"})
 
 
 class DiscussRequest(BaseModel):
@@ -1197,14 +1503,21 @@ async def discuss(request: DiscussRequest):
 
             llm = get_llm("minimax")
 
-            system_prompt = f"""You are a helpful architecture and development advisor for a Spring Boot + Svelte project.
+            tech_stack_line = (
+                "Use the SPEC.md below to identify the exact tech stack for this project."
+                if spec_content
+                else "This appears to be a new project with no SPEC.md yet — ask the user what stack they want."
+            )
+            system_prompt = f"""You are a helpful architecture and development advisor.
 
 Your role is to DISCUSS, CLARIFY, and RECOMMEND - not to write code or execute commands.
+
+{tech_stack_line}
 
 Guidelines:
 - Ask clarifying questions to understand requirements better
 - Explain architectural decisions and tradeoffs
-- Suggest best practices for Spring Boot and Svelte
+- Suggest best practices for the tech stack defined in SPEC.md
 - Discuss implementation approaches without implementing them
 - You have read-only access to the project workspace
 
@@ -1344,14 +1657,28 @@ async def stream(project_id: str, request: Request):
     context_mode = _normalize_context_mode(context_mode)
     run_mode = request.query_params.get("mode") or "generate"
     ui_mode = request.query_params.get("ui_mode") or "build"
+    since_event_id = _parse_last_event_id(
+        request.headers.get("last-event-id") or request.query_params.get("since_event_id")
+    )
 
     async def event_generator_wrapper():
-        async for event in event_generator(project_id, user_message, context_mode, run_mode, ui_mode):
+        async for event in event_generator(
+            project_id,
+            user_message,
+            context_mode,
+            run_mode,
+            ui_mode,
+            since_event_id=since_event_id,
+        ):
             if await request.is_disconnected():
                 break
             yield event
 
-    return EventSourceResponse(event_generator_wrapper())
+    return EventSourceResponse(
+        event_generator_wrapper(),
+        ping=15,
+        headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/status/{project_id}")
@@ -1443,6 +1770,79 @@ async def create_project(request: ProjectCreateRequest):
     except Exception as e:
         logger.error(f"[projects] Failed to create: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Completely delete a project and all associated data.
+
+    Cleans up:
+    - PostgreSQL: project, messages, checkpoints, context_summaries, agent_checkpoints
+    - Redis: all project:* keys
+    - Filesystem: workspace and checkpoint directories
+    - MinIO: checkpoint objects
+    """
+    # 1. Reject if project is currently running
+    state = await blackboard.get_project_state(project_id)
+    if state and state.get("status") == "running":
+        return JSONResponse(
+            {"error": "Cannot delete a running project", "project_id": project_id},
+            status_code=409,
+        )
+
+    deleted = {
+        "database": False,
+        "redis": 0,
+        "filesystem_workspace": False,
+        "filesystem_checkpoints": False,
+        "minio": {},
+    }
+
+    try:
+        # 2. Delete from PostgreSQL
+        await database.delete_project(project_id)
+        deleted["database"] = True
+    except Exception as e:
+        logger.error(f"[delete] Database cleanup failed for {project_id}: {e}")
+
+    try:
+        # 3. Delete all Redis keys for project
+        redis_deleted = await blackboard.delete_project_keys(project_id)
+        deleted["redis"] = redis_deleted
+    except Exception as e:
+        logger.error(f"[delete] Redis cleanup failed for {project_id}: {e}")
+
+    try:
+        # 4. Delete workspace directory
+        workspace = WORKSPACE_BASE / project_id
+        if workspace.exists():
+            shutil.rmtree(workspace)
+            deleted["filesystem_workspace"] = True
+    except Exception as e:
+        logger.error(f"[delete] Workspace cleanup failed for {project_id}: {e}")
+
+    try:
+        # 5. Delete local checkpoint directory
+        checkpoint_dir = CHECKPOINT_BASE / project_id
+        if checkpoint_dir.exists():
+            shutil.rmtree(checkpoint_dir)
+            deleted["filesystem_checkpoints"] = True
+    except Exception as e:
+        logger.error(f"[delete] Checkpoint cleanup failed for {project_id}: {e}")
+
+    try:
+        # 6. Delete MinIO objects
+        minio_result = await storage.delete_objects_by_prefix(f"checkpoints/{project_id}/")
+        deleted["minio"] = minio_result
+    except Exception as e:
+        logger.error(f"[delete] MinIO cleanup failed for {project_id}: {e}")
+
+    logger.info(f"[delete] Project {project_id} deleted: {deleted}")
+    return JSONResponse({
+        "project_id": project_id,
+        "deleted": deleted,
+        "status": "deleted",
+    })
 
 
 @app.get("/api/projects/{project_id}/messages")

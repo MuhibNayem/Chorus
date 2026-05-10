@@ -239,6 +239,32 @@ class Database:
                 return dict(row)
         return None
 
+    async def delete_project(self, project_id: str) -> bool:
+        """Completely delete a project and all associated data."""
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM chat_messages WHERE project_id = $1",
+                    project_id,
+                )
+                await conn.execute(
+                    "DELETE FROM project_checkpoints WHERE project_id = $1",
+                    project_id,
+                )
+                await conn.execute(
+                    "DELETE FROM context_summaries WHERE project_id = $1",
+                    project_id,
+                )
+                await conn.execute(
+                    "DELETE FROM agent_checkpoints WHERE project_id = $1",
+                    project_id,
+                )
+                await conn.execute(
+                    "DELETE FROM projects WHERE id = $1",
+                    project_id,
+                )
+        return True
+
     async def save_chat_message(
         self,
         message_id: str,

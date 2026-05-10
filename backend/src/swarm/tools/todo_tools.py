@@ -50,6 +50,50 @@ def _get_todo_key(project_id: str, agent_name: str) -> str:
     return f"project:{project_id}:agent:{agent_name}:todos"
 
 
+def _get_status_key(project_id: str, agent_name: str) -> str:
+    return f"project:{project_id}:agent:{agent_name}:status"
+
+
+async def clear_agent_final(project_id: str, agent_name: str):
+    r = redis.from_url(REDIS_URL, decode_responses=True)
+    try:
+        await r.delete(_get_status_key(project_id, agent_name))
+    finally:
+        await r.aclose()
+
+
+async def mark_agent_final(project_id: str, agent_name: str):
+    r = redis.from_url(REDIS_URL, decode_responses=True)
+    try:
+        await r.set(_get_status_key(project_id, agent_name), "complete", ex=3600)
+    finally:
+        await r.aclose()
+
+
+async def get_agent_todos(project_id: str, agent_name: str) -> List[Dict[str, Any]]:
+    r = redis.from_url(REDIS_URL, decode_responses=True)
+    try:
+        raw = await r.get(_get_todo_key(project_id, agent_name))
+        if raw:
+            return json.loads(raw)
+    except Exception as e:
+        logger.warning(f"[get_agent_todos] Redis load failed: {e}")
+    finally:
+        await r.aclose()
+    return _agent_todos.get(f"{project_id}:{agent_name}", [])
+
+
+async def _agent_is_final(project_id: str, agent_name: str) -> bool:
+    r = redis.from_url(REDIS_URL, decode_responses=True)
+    try:
+        return await r.get(_get_status_key(project_id, agent_name)) == "complete"
+    except Exception as e:
+        logger.warning(f"[todo_tools] Redis status load failed: {e}")
+        return False
+    finally:
+        await r.aclose()
+
+
 async def _publish_state_event(project_id: str, agent_name: str, todos: List[Dict[str, Any]]):
     """Publish a state event to Redis so the frontend receives the updated todos."""
     r = redis.from_url(REDIS_URL, decode_responses=True)
@@ -90,6 +134,9 @@ async def write_todos(todos: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     project_id = get_project_id()
     agent_name = get_agent_name()
+
+    if await _agent_is_final(project_id, agent_name):
+        return {"status": "error", "error": f"{agent_name} is already complete; todo list is locked."}
 
     # Validate todo structure
     validated = []
@@ -145,6 +192,9 @@ async def update_todo_status(index: int, status: str) -> Dict[str, Any]:
     """
     project_id = get_project_id()
     agent_name = get_agent_name()
+
+    if await _agent_is_final(project_id, agent_name):
+        return {"status": "error", "error": f"{agent_name} is already complete; todo list is locked."}
 
     if status not in ("pending", "in_progress", "completed"):
         return {"status": "error", "error": f"Invalid status: {status}. Use pending/in_progress/completed."}

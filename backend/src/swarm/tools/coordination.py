@@ -12,15 +12,30 @@ logger = logging.getLogger("tools")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
+def _dependency_result(dependency: str, data: Any) -> Dict[str, Any]:
+    if isinstance(data, dict) and data.get("status") in {"error", "failed"}:
+        return {"status": "error", "dependency": dependency, "data": data}
+    return {"status": "success", "dependency": dependency, "data": data}
+
+
 @tool("wait_on_agent")
 async def wait_on_agent(dependency: str) -> Dict[str, Any]:
-    """Wait for another agent to complete a specific task or publish a spec.
+    """[COMPATIBILITY-ONLY] Wait for another agent to complete a specific task.
+
+    Deprecated: Agents should use `wait_for_claim` instead. This tool is kept
+    only for backward compatibility during the claim protocol transition.
+
     Uses Redis pub/sub with persistent storage for 100% reliable delivery.
     Blocks indefinitely until dependency is satisfied (supports hours-long waits).
 
     Args:
         dependency: The name of the dependency to wait for (e.g., 'backend_api')
     """
+    logger.warning(
+        "[DEPRECATED] wait_on_agent called for '%s'. "
+        "Agents should use wait_for_claim instead.",
+        dependency,
+    )
     project_id = get_project_id()
     dep_key = f"project:{project_id}:dep:{dependency}"
     channel = f"project:{project_id}:events"
@@ -38,7 +53,7 @@ async def wait_on_agent(dependency: str) -> Dict[str, Any]:
                 pass
             await r.delete(dep_key)
             logger.info(f"[wait_on_agent] Consumed dependency key: {dep_key}")
-            return {"status": "success", "dependency": dependency, "data": data}
+            return _dependency_result(dependency, data)
 
         # 2. Infinite wait via pub/sub with persistent backup
         logger.info(f"[wait_on_agent] Entering infinite wait for: {dependency}")
@@ -59,7 +74,7 @@ async def wait_on_agent(dependency: str) -> Dict[str, Any]:
                                 pass
                             await r.delete(dep_key)
                             logger.info(f"[wait_on_agent] Consumed dependency key: {dep_key}")
-                            return {"status": "success", "dependency": dependency, "data": data}
+                            return _dependency_result(dependency, data)
                     except Exception as e:
                         logger.debug(f"[wait_on_agent] Error checking dependency: {e}")
                         continue
@@ -72,7 +87,7 @@ async def wait_on_agent(dependency: str) -> Dict[str, Any]:
                 except:
                     pass
                 await r.delete(dep_key)
-                return {"status": "success", "dependency": dependency, "data": data}
+                return _dependency_result(dependency, data)
             raise
         finally:
             await pubsub.unsubscribe(channel)
@@ -83,16 +98,7 @@ async def wait_on_agent(dependency: str) -> Dict[str, Any]:
     return {"status": "error", "error": "Unexpected exit from wait loop"}
 
 
-@tool("signal_ready")
-async def signal_ready(dependency: str, data: str) -> Dict[str, Any]:
-    """Signal to the swarm that your task is complete or a spec is ready.
-    Publishes event to wake up all waiting agents. Data persists in Redis
-    until explicitly consumed by wait_on_agent.
-
-    Args:
-        dependency: The name of the dependency you are fulfilling (e.g., 'backend_api')
-        data: The JSON string or description of the data being shared
-    """
+async def signal_dependency_ready(dependency: str, data: str) -> Dict[str, Any]:
     project_id = get_project_id()
     dep_key = f"project:{project_id}:dep:{dependency}"
 
@@ -123,3 +129,25 @@ async def signal_ready(dependency: str, data: str) -> Dict[str, Any]:
         }
     finally:
         await r.aclose()
+
+
+@tool("signal_ready")
+async def signal_ready(dependency: str, data: str) -> Dict[str, Any]:
+    """[COMPATIBILITY-ONLY] Signal that a task is complete.
+
+    Deprecated: Agents should use `publish_claim` instead. This tool is kept
+    only for backward compatibility during the claim protocol transition.
+
+    Publishes event to wake up all waiting agents. Data persists in Redis
+    until explicitly consumed by wait_on_agent.
+
+    Args:
+        dependency: The name of the dependency you are fulfilling (e.g., 'backend_api')
+        data: The JSON string or description of the data being shared
+    """
+    logger.warning(
+        "[DEPRECATED] signal_ready called for '%s'. "
+        "Agents should use publish_claim instead.",
+        dependency,
+    )
+    return await signal_dependency_ready(dependency, data)

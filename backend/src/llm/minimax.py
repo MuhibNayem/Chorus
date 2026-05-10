@@ -1,6 +1,8 @@
 import os
+import asyncio
+import time
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, AsyncIterator, Iterator
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -17,6 +19,100 @@ AGENT_MAX_TOKENS = {
     "devops": 16384,
     "packager": 16384,
 }
+
+# Per-agent temperature: lower for architects/planners (reduce hallucination),
+# moderate for creative coding agents.
+AGENT_TEMPERATURE = {
+    "rootdep": 0.3,
+    "backend": 0.7,
+    "frontend": 0.7,
+    "devops": 0.7,
+    "packager": 0.5,
+}
+
+_retry_kwargs = dict(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+
+
+class _BoundMiniMaxLLM:
+    """Proxy that applies retry logic to a bound LangChain runnable.
+
+    LangChain agent creation calls ``bind_tools()`` on the model and then
+    invokes ``ainvoke()`` / ``invoke()`` on the *bound* object.  If we
+    return the raw ``ChatOpenAI`` binding, those calls bypass the retry
+    decorators on ``MiniMaxLLM``.  This wrapper intercepts the critical
+    call paths and retries them on transient network errors.
+    """
+
+    def __init__(self, bound_obj: Any):
+        self._bound_obj = bound_obj
+
+    @retry(**_retry_kwargs)
+    async def ainvoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> Any:
+        return await self._bound_obj.ainvoke(input, config=config, **kwargs)
+
+    @retry(**_retry_kwargs)
+    def invoke(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> Any:
+        return self._bound_obj.invoke(input, config=config, **kwargs)
+
+    async def astream(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> AsyncIterator[Any]:
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                async for chunk in self._bound_obj.astream(input, config=config, **kwargs):
+                    yield chunk
+                return
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"[MiniMax] astream attempt {attempt} failed: {e}")
+                if attempt >= 3:
+                    raise last_exc  # type: ignore[misc]
+                await asyncio.sleep(2 ** attempt)
+
+    def stream(self, input: Any, config: Optional[Any] = None, **kwargs: Any) -> Iterator[Any]:
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                for chunk in self._bound_obj.stream(input, config=config, **kwargs):
+                    yield chunk
+                return
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"[MiniMax] stream attempt {attempt} failed: {e}")
+                if attempt >= 3:
+                    raise last_exc  # type: ignore[misc]
+                time.sleep(2 ** attempt)
+
+    async def astream_events(
+        self,
+        input: Any,
+        config: Optional[Any] = None,
+        *,
+        version: str = "v2",
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                async for event in self._bound_obj.astream_events(
+                    input, config=config, version=version, **kwargs
+                ):
+                    yield event
+                return
+            except Exception as e:
+                last_exc = e
+                logger.warning(f"[MiniMax] astream_events attempt {attempt} failed: {e}")
+                if attempt >= 3:
+                    raise last_exc  # type: ignore[misc]
+                await asyncio.sleep(2 ** attempt)
+
+    def bind_tools(self, tools: List[Any], **kwargs: Any) -> "_BoundMiniMaxLLM":
+        return _BoundMiniMaxLLM(self._bound_obj.bind_tools(tools, **kwargs))
+
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> "_BoundMiniMaxLLM":
+        return _BoundMiniMaxLLM(self._bound_obj.with_structured_output(schema, **kwargs))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._bound_obj, name)
 
 
 class MiniMaxLLM:
@@ -88,11 +184,11 @@ class MiniMaxLLM:
             logger.error(f"[MiniMax] stream error: {type(e).__name__}: {e}, args={e.args if e.args else 'none'}")
             raise
 
-    def bind_tools(self, tools: List[Any], **kwargs):
-        return self.llm.bind_tools(tools, **kwargs)
+    def bind_tools(self, tools: List[Any], **kwargs: Any) -> _BoundMiniMaxLLM:
+        return _BoundMiniMaxLLM(self.llm.bind_tools(tools, **kwargs))
 
-    def with_structured_output(self, schema: Any):
-        return self.llm.with_structured_output(schema)
+    def with_structured_output(self, schema: Any, **kwargs: Any) -> _BoundMiniMaxLLM:
+        return _BoundMiniMaxLLM(self.llm.with_structured_output(schema, **kwargs))
 
 
 class MiniMaxReActLLM(MiniMaxLLM):
@@ -109,13 +205,15 @@ def get_llm(provider: str = "minimax", agent_name: Optional[str] = None) -> Mini
     if provider != "minimax":
         raise ValueError(f"Unknown provider: {provider}")
     max_tokens = AGENT_MAX_TOKENS.get(agent_name, 8192) if agent_name else 8192
-    return MiniMaxLLM(max_tokens=max_tokens)
+    temperature = AGENT_TEMPERATURE.get(agent_name, 0.7)
+    return MiniMaxLLM(model="MiniMax-M2.7", temperature=temperature, max_tokens=max_tokens)
 
 
 def create_minimax_client(agent_name: Optional[str] = None) -> MiniMaxLLM:
     max_tokens = AGENT_MAX_TOKENS.get(agent_name, 8192) if agent_name else 8192
+    temperature = AGENT_TEMPERATURE.get(agent_name, 0.7)
     return MiniMaxLLM(
         model="MiniMax-M2.7",
-        temperature=1.0,
+        temperature=temperature,
         max_tokens=max_tokens,
     )

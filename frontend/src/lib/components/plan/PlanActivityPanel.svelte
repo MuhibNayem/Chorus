@@ -4,18 +4,16 @@
 		AgentStreamEvent,
 		AgentEventType,
 	} from "$lib/agent-registry.svelte";
-	import {
-		Brain,
-		CheckCircle2,
-		Clock3,
-		FileCode2,
-		FileSearch,
-		Loader2,
-		Sparkles,
-		TerminalSquare,
-		Wrench,
-		XCircle,
-	} from "lucide-svelte";
+	import Brain from '@lucide/svelte/icons/brain';
+	import CheckCircle2 from '@lucide/svelte/icons/check-circle-2';
+	import Clock3 from '@lucide/svelte/icons/clock-3';
+	import FileCode2 from '@lucide/svelte/icons/file-code-2';
+	import FileSearch from '@lucide/svelte/icons/file-search';
+	import Loader2 from '@lucide/svelte/icons/loader-2';
+	import Sparkles from '@lucide/svelte/icons/sparkles';
+	import TerminalSquare from '@lucide/svelte/icons/terminal-square';
+	import Wrench from '@lucide/svelte/icons/wrench';
+	import XCircle from '@lucide/svelte/icons/x-circle';
 
 	let {
 		agents,

@@ -1,6 +1,7 @@
 import type { AgentEvent, ChatMessage, AgentActivity, ProjectProgress } from '$lib/types';
 
 export type SSECallbacks = {
+	onOpen?: (projectId: string) => void;
 	onLifecycle?: (event: AgentEvent) => void;
 	onStep?: (event: AgentEvent) => void;
 	onText?: (event: AgentEvent) => void;
@@ -13,17 +14,26 @@ export type SSECallbacks = {
 	onProgress?: (progress: ProjectProgress) => void;
 	onFileCreated?: (event: AgentEvent) => void;
 	onFileModified?: (event: AgentEvent) => void;
+	onDirectoryCreated?: (event: AgentEvent) => void;
 	onError?: (event: AgentEvent) => void;
 	onComplete?: (event: AgentEvent) => void;
 	onDownloadReady?: (event: AgentEvent) => void;
 	onPlanReady?: (event: AgentEvent) => void;
 	onMessage?: (message: ChatMessage) => void;
 	onRawEvent?: (event: AgentEvent) => void;
+	onQuestion?: (event: AgentEvent) => void;
+	onAgentPaused?: (event: AgentEvent) => void;
+	onAgentResumed?: (event: AgentEvent) => void;
+	onSwarmStopped?: (event: AgentEvent) => void;
 };
 
 export class AGUIClient {
 	private eventSource: EventSource | null = null;
 	private callbacks: SSECallbacks;
+	private currentProjectId: string | null = null;
+	private lastEventIdFor(projectId: string) {
+		return `chorus.lastEventId.${projectId}`;
+	}
 
 	constructor(callbacks: SSECallbacks = {}) {
 		this.callbacks = callbacks;
@@ -33,18 +43,29 @@ export class AGUIClient {
 		if (this.eventSource) {
 			this.eventSource.close();
 		}
+		this.currentProjectId = projectId;
 
 		const params = new URLSearchParams();
 		if (contextMode) params.set('context_mode', contextMode);
 		if (mode) params.set('mode', mode);
 		if (uiMode) params.set('ui_mode', uiMode);
+		if (typeof sessionStorage !== 'undefined') {
+			const lastEventId = sessionStorage.getItem(this.lastEventIdFor(projectId));
+			if (lastEventId) params.set('since_event_id', lastEventId);
+		}
 
 		const query = params.toString();
 		const url = query ? `/api/stream/${projectId}?${query}` : `/api/stream/${projectId}`;
 		this.eventSource = new EventSource(url);
+		this.eventSource.onopen = () => {
+			this.callbacks.onOpen?.(projectId);
+		};
 
 		this.eventSource.onmessage = (event) => {
 			try {
+				if (event.lastEventId && typeof sessionStorage !== 'undefined') {
+					sessionStorage.setItem(this.lastEventIdFor(projectId), event.lastEventId);
+				}
 				const data = JSON.parse(event.data) as AgentEvent;
 				this.handleEvent(data);
 			} catch (e) {
@@ -125,6 +146,9 @@ export class AGUIClient {
 			case 'file_modified':
 				this.callbacks.onFileCreated?.(normalizedEvent);
 				break;
+			case 'directory_created':
+				this.callbacks.onDirectoryCreated?.(normalizedEvent);
+				break;
 			case 'error':
 				this.callbacks.onError?.(normalizedEvent);
 				break;
@@ -146,6 +170,26 @@ export class AGUIClient {
 				this.callbacks.onPlanReady?.(normalizedEvent);
 				this.disconnect();
 				break;
+			case 'question':
+				this.callbacks.onQuestion?.(normalizedEvent);
+				break;
+			case 'agent_paused':
+				this.callbacks.onAgentPaused?.(normalizedEvent);
+				break;
+			case 'agent_resumed':
+				this.callbacks.onAgentResumed?.(normalizedEvent);
+				break;
+			case 'swarm_stop_requested':
+			case 'agent_stopped':
+			case 'stopped':
+				this.callbacks.onSwarmStopped?.(normalizedEvent);
+				break;
+			case 'directive_received':
+			case 'directive_queued':
+			case 'pause_requested':
+			case 'resume_requested':
+				this.callbacks.onRawEvent?.(normalizedEvent);
+				break;
 		}
 	}
 
@@ -154,6 +198,7 @@ export class AGUIClient {
 			this.eventSource.close();
 			this.eventSource = null;
 		}
+		this.currentProjectId = null;
 	}
 }
 

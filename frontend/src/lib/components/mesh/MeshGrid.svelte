@@ -5,11 +5,19 @@
 	let {
 		agents,
 		selectedId,
-		onSelect
+		onSelect,
+		projectId,
+		onPause,
+		onResume,
+		onDirect
 	}: {
 		agents: AgentStream[];
 		selectedId: string | null;
 		onSelect: (id: string) => void;
+		projectId?: string | null;
+		onPause?: (agentId: string) => void;
+		onResume?: (agentId: string, message: string) => void;
+		onDirect?: (agentId: string, message: string) => void;
 	} = $props();
 
 	// Only show real swarm agents (filter out system/ghost agents)
@@ -41,6 +49,10 @@
 						{agent}
 						isSelected={selectedId === agent.id}
 						onSelect={onSelect}
+						{projectId}
+						onPause={onPause}
+						onResume={onResume}
+						onDirect={onDirect}
 					/>
 				{/each}
 			</div>
@@ -61,6 +73,10 @@
 						{agent}
 						isSelected={selectedId === agent.id}
 						onSelect={onSelect}
+						{projectId}
+						onPause={onPause}
+						onResume={onResume}
+						onDirect={onDirect}
 					/>
 				{/each}
 			</div>
