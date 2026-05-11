@@ -2,6 +2,7 @@ import os
 import asyncio
 import time
 import logging
+import httpx
 from typing import Optional, List, Dict, Any, AsyncIterator, Iterator
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
@@ -122,7 +123,7 @@ class MiniMaxLLM:
         api_key: Optional[str] = None,
         temperature: float = 1.0,
         max_tokens: int = 8192,
-        timeout: int = 300,
+        timeout: int = 3600,
     ):
         self.model = model
         self.api_key = api_key or MINIMAX_API_KEY
@@ -133,13 +134,21 @@ class MiniMaxLLM:
         if not self.api_key:
             raise ValueError("MINIMAX_API_KEY must be set")
 
+        custom_timeout = httpx.Timeout(
+            connect=15.0,
+            read=float(self.timeout),
+            write=15.0,
+            pool=15.0
+        )
+
         self.llm = ChatOpenAI(
             model=self.model,
             openai_api_key=self.api_key,
             openai_api_base=MINIMAX_BASE_URL,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
-            timeout=self.timeout,
+            timeout=custom_timeout,
+            max_retries=0,
             stream_chunk_timeout=None,
         )
 

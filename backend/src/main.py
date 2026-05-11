@@ -72,6 +72,34 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"PostgreSQL connection failed: {e}")
 
+    # --- Startup cleanup: clear stale swarm locks and reset orphaned running states ---
+    try:
+        if getattr(blackboard, "_redis", None):
+            async for key in blackboard._redis.scan_iter(match="project:*:swarm_lock"):
+                await blackboard._redis.delete(key)
+                logger.info(f"[STARTUP] Cleared stale swarm lock: {key}")
+
+            async for key in blackboard._redis.scan_iter(match="project:*:state"):
+                state_raw = await blackboard._redis.get(key)
+                if state_raw:
+                    try:
+                        state = json.loads(state_raw)
+                        if state.get("status") in ("running", "planning"):
+                            state["status"] = "error"
+                            state["error"] = "Backend restarted while swarm was running"
+                            await blackboard._redis.set(key, json.dumps(state))
+                            pid = key.split(":")[1]
+                            logger.warning(f"[STARTUP] Reset orphaned project state to error: {pid}")
+                            try:
+                                await database.update_project_status(pid, "error")
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.warning(f"[STARTUP] Failed to run stale-lock cleanup: {e}")
+    # --- End startup cleanup ---
+
     yield
 
     await blackboard.disconnect()
@@ -537,7 +565,7 @@ async def start_swarm_background(
     r: _redis.Redis | None = None
     try:
         r = _redis.from_url(redis_url, decode_responses=True)
-        lock_acquired = await r.set(lock_key, "1", nx=True, ex=3600)
+        lock_acquired = await r.set(lock_key, "1", nx=True)
         if not lock_acquired:
             logger.warning(f"[BG] Swarm already running for project {project_id} — skipping duplicate")
             await blackboard.publish_agent_event(
@@ -733,6 +761,7 @@ async def start_plan_swarm_background(
 ):
     """Background task to run ONLY RootDep for plan mode - does NOT run full swarm."""
     from .swarm.agents import AgentSwarm
+    import redis.asyncio as _redis
 
     # Ensure connections are active (especially for Celery workers)
     if not getattr(blackboard, "_redis", None):
@@ -740,6 +769,28 @@ async def start_plan_swarm_background(
     if not getattr(database, "_pool", None):
         await database.connect()
         await database.init_schema()
+
+    # --- Distributed lock: prevent concurrent plan runs for the same project ---
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    lock_key = f"project:{project_id}:swarm_lock"
+    lock_acquired = False
+    r: _redis.Redis | None = None
+    try:
+        r = _redis.from_url(redis_url, decode_responses=True)
+        lock_acquired = await r.set(lock_key, "1", nx=True)
+        if not lock_acquired:
+            logger.warning(f"[BG-PLAN] Plan already running for project {project_id} — skipping duplicate")
+            await blackboard.publish_agent_event(
+                project_id, "system", "warning",
+                f"Plan execution skipped: another instance is already running for this project.",
+                {"reason": "duplicate_plan_prevented"},
+            )
+            return
+    except Exception as lock_err:
+        logger.warning(f"[BG-PLAN] Lock acquisition failed for {project_id}: {lock_err} — proceeding without lock")
+    finally:
+        if r is not None:
+            await r.aclose()
 
     logger.info(f"[BG-PLAN] Starting plan mode for project: {project_id}")
 
@@ -853,6 +904,15 @@ async def start_plan_swarm_background(
         await blackboard.publish_agent_event(project_id, "system", "error", str(e))
     finally:
         await swarm.shutdown()
+        # --- Release distributed lock ---
+        if lock_acquired:
+            try:
+                r = _redis.from_url(redis_url, decode_responses=True)
+                await r.delete(lock_key)
+                await r.aclose()
+                logger.info(f"[BG-PLAN] Released swarm lock for project {project_id}")
+            except Exception as unlock_err:
+                logger.warning(f"[BG-PLAN] Failed to release swarm lock for {project_id}: {unlock_err}")
 
 
 async def event_generator(
@@ -1311,7 +1371,7 @@ async def send_directive(project_id: str, request: DirectiveRequest):
     import os as _os
     from .swarm.tools.user_directive import directive_redis_key
 
-    VALID_AGENTS = {"backend", "frontend", "devops", "packager"}
+    VALID_AGENTS = {"rootdep", "backend", "frontend", "devops", "packager"}
     if request.agent not in VALID_AGENTS:
         return JSONResponse(
             {"status": "error", "error": f"Unknown agent '{request.agent}'. Valid: {sorted(VALID_AGENTS)}"},

@@ -256,9 +256,10 @@ Workflow:
 5. write_spec_file("SPEC.md", ...) — write ONE concise but complete specification using the chosen tech stack.
    Include: tech stack, data models, API endpoints, auth strategy, and folder structure. Keep it under 300 lines.
 6. create_directory — create backend/ and frontend/ (or equivalent) folders.
-7. publish_claim("SPEC_READY", {"files": ["SPEC.md"], "metadata": {"folders": ["backend", "frontend"]}}).
-8. update_todo_status — mark steps done.
-9. Finish. The backend, frontend, devops, and packager agents will handle ALL code generation from here.
+7. poll_user_directive() — check for any mid-run instructions before finishing.
+8. publish_claim("SPEC_READY", {"files": ["SPEC.md"], "metadata": {"folders": ["backend", "frontend"]}}).
+9. update_todo_status — mark steps done.
+10. Finish. The backend, frontend, devops, and packager agents will handle ALL code generation from here.
 
 Rules:
 - You have write_spec_file, NOT write_file. You can ONLY write root-level planning files (SPEC.md, AGENTS_NEEDED.json).
@@ -267,6 +268,7 @@ Rules:
 - Do NOT write SUBTASKS.md, PROJECT_PLAN.md, or BLACKBOARD.md.
 - Do NOT call generate_spring_boot_project or any code generation tool.
 - Respect the user's chosen tech stack exactly as they specified it.
+- MANDATORY: Call poll_user_directive() before publishing SPEC_READY.
 """,
     "backend": """You are Backend Agent. Write the backend using write_file according to SPEC.md.
 
@@ -541,6 +543,7 @@ def build_agent_toolset(
             web_search,
             fetch_url,
             ask_user,
+            poll_user_directive,
             verify_contract,
         ]
     if agent_name == "backend":
@@ -619,6 +622,25 @@ def build_agent_toolset(
         fetch_url,
         ask_user,
     ]
+
+
+def _normalize_agent_names(agents: list) -> list[str]:
+    """Normalize AGENTS_NEEDED.json 'agents' field to a list of strings.
+
+    Accepts both string arrays and dict arrays (e.g. [{"id": "backend"}, ...]).
+    """
+    normalized: list[str] = []
+    for a in agents:
+        if isinstance(a, str):
+            normalized.append(a)
+        elif isinstance(a, dict):
+            if "id" in a:
+                normalized.append(a["id"])
+            elif "agent" in a:
+                normalized.append(a["agent"])
+            elif "name" in a:
+                normalized.append(a["name"])
+    return normalized
 
 
 class AgentSwarm:
@@ -1641,7 +1663,7 @@ class AgentSwarm:
         from .tools.workspace_tools import WORKSPACE_BASE
 
         workspace = WORKSPACE_BASE / self.project_id if self.project_id else None
-        agents_to_run = agents_data.get("agents", [])
+        agents_to_run = _normalize_agent_names(agents_data.get("agents", []))
         reasoning = agents_data.get("reasoning", "")
 
         # 1. Question vs code-change classification check
@@ -1901,7 +1923,7 @@ class AgentSwarm:
             if agents_needed_path.exists():
                 try:
                     agents_data = json.loads(agents_needed_path.read_text())
-                    agents_to_run = agents_data.get("agents", [])
+                    agents_to_run = _normalize_agent_names(agents_data.get("agents", []))
                     reasoning = agents_data.get("reasoning", "")
                     logger.info(f"[Swarm] RootDep router selected: {agents_to_run}")
 
@@ -2001,7 +2023,7 @@ class AgentSwarm:
                             filtered_task_definitions["devops"] = task_definitions["devops"]
                             # Also rewrite AGENTS_NEEDED.json to reflect the fix
                             agents_data["agents"] = list(
-                                dict.fromkeys(list(agents_data.get("agents", [])) + ["devops"])
+                                dict.fromkeys(agents_to_run + ["devops"])
                             )
                             agents_data["reasoning"] = (
                                 agents_data.get("reasoning", "")
