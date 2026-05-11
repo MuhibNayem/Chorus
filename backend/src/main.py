@@ -1145,6 +1145,9 @@ async def create_plan(request: PlanRequest):
             spec={
                 "message": request.message,
                 "mode": "plan",
+                "run_mode": request.mode if request.mode in {"generate", "modify"} else ("modify" if request.project_id else "generate"),
+                "context_mode": "auto",
+                "ui_mode": "plan",
             },
             status="planning",
         )
@@ -1179,6 +1182,8 @@ async def create_plan(request: PlanRequest):
     return JSONResponse({
         "project_id": project_id,
         "status": "planning",
+        "mode": request.mode if request.mode in {"generate", "modify"} else ("modify" if request.project_id else "generate"),
+        "context_mode": "auto",
         "message": "Plan generation started. Connect to SSE stream for updates.",
     })
 

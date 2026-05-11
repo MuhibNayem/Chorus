@@ -1568,7 +1568,7 @@ class AgentSwarm:
                 ]
                 if not existing_files:
                     return None
-                logger.warning(
+                logger.info(
                     "[Swarm] Re-publishing canonical %s after invalid claim: %s",
                     claim_type,
                     reason,

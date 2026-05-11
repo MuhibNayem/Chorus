@@ -604,6 +604,31 @@ def _normalize_claim_evidence(workspace: Path, evidence: dict[str, Any] | None) 
     return normalized
 
 
+def _canonicalize_claim_evidence(
+    workspace: Path,
+    claim_type: str,
+    evidence: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Normalize agent evidence and add deterministic claim-specific evidence.
+
+    RootDep can occasionally publish SPEC_READY with metadata only or with a
+    malformed files list even though SPEC.md exists. The coordinator can derive
+    the correct evidence later, but doing it here prevents an avoidable invalid
+    claim and recovery event for a valid workspace state.
+    """
+    normalized = _normalize_claim_evidence(workspace, evidence)
+
+    if claim_type == ClaimType.SPEC_READY.value and (workspace / "SPEC.md").is_file():
+        files = [str(path).strip().lstrip("./") for path in normalized.get("files") or []]
+        if "SPEC.md" not in files:
+            files.insert(0, "SPEC.md")
+        normalized["files"] = list(dict.fromkeys(files))
+        normalized.setdefault("metadata", {})
+        normalized["metadata"].setdefault("spec_exists", True)
+
+    return normalized
+
+
 def _workspace_for_project(project_id: str) -> Path:
     try:
         return Path(get_workspace())
@@ -628,7 +653,7 @@ async def verify_and_publish_claim_record(
     This is the Tier 1 sandbox feedback loop.
     """
     workspace = _workspace_for_project(project_id)
-    normalized_evidence = _normalize_claim_evidence(workspace, evidence)
+    normalized_evidence = _canonicalize_claim_evidence(workspace, claim_type, evidence)
     build_command = normalized_evidence.get("metadata", {}).get("build_command") or None
     verification = await _run_verification(
         workspace, producer_agent, claim_type, build_command=build_command
@@ -911,7 +936,11 @@ async def publish_claim_record(
         git_hash = snapshot_workspace(project_id, f"{claim_type}-{producer_agent}")
 
         # Enrich evidence with workspace revision
-        enriched_evidence = _normalize_claim_evidence(_workspace_for_project(project_id), evidence)
+        enriched_evidence = _canonicalize_claim_evidence(
+            _workspace_for_project(project_id),
+            claim_type,
+            evidence,
+        )
         if git_hash:
             enriched_evidence.setdefault("metadata", {})
             enriched_evidence["metadata"]["workspace_revision"] = git_hash

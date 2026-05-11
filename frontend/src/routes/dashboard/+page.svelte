@@ -12,7 +12,7 @@
 	} from "$lib/components/mesh";
 	import { DownloadButtons } from "$lib/components/chat";
 	import PlanSpecPreview from "$lib/components/plan/PlanSpecPreview.svelte";
-	import PlanActivityPanel from "$lib/components/plan/PlanActivityPanel.svelte";
+	import PlanActivityPanel from "$lib/components/plan/PlanActivityCompact.svelte";
 	import { agentRegistry } from "$lib/agent-registry.svelte";
 	import { AGUIClient } from "$lib/aguiclient";
 	import ProjectSidebar from "$lib/components/ProjectSidebar.svelte";
@@ -74,6 +74,8 @@
 	let specContent = $state<string | null>(null);
 	let isEditingSpec = $state(false);
 	let editedSpecContent = $state("");
+	let currentPlanPrompt = $state("");
+	let planAnswerSummaries = $state<string[]>([]);
 	let agentDetailBody: HTMLDivElement | null = $state(null);
 	let shouldFollowAgentDetail = $state(true);
 	let lastAgentScrollSignature = "";
@@ -239,7 +241,6 @@
 	}
 
 	function isNearAgentDetailLiveEdge(el: HTMLDivElement, tab = agentDetailTab): boolean {
-		if (tab === 'timeline') return el.scrollTop <= 80;
 		return el.scrollHeight - el.scrollTop - el.clientHeight <= 120;
 	}
 
@@ -250,15 +251,14 @@
 
 	function scrollAgentDetailToLatest(behavior: ScrollBehavior = 'smooth') {
 		if (!agentDetailBody) return;
-		const top = agentDetailTab === 'timeline' ? 0 : agentDetailBody.scrollHeight;
-		agentDetailBody.scrollTo({ top, behavior });
+		agentDetailBody.scrollTo({ top: agentDetailBody.scrollHeight, behavior });
 	}
 
 	$effect(() => {
 		const agentId = selectedAgent?.id || '';
 		const tab = agentDetailTab;
 		const eventCount = selectedAgent?.events.filter((e) => e.type !== 'thinking' && e.type !== 'reasoning').length || 0;
-		const thinkingCount = selectedAgent?.events.filter((e) => (e.type === 'thinking' || e.type === 'reasoning') && stripThinkTags(e.content || '').trim()).length || 0;
+		const thinkingCount = selectedAgent?.events.filter((e) => (e.type === 'thinking' || e.type === 'reasoning') && formatThinkingContent(e.content || '').trim()).length || 0;
 		const toolCount = selectedAgent?.toolCalls.length || 0;
 		const taskCount = selectedAgent?.tasks.length || 0;
 		const completedTaskCount = selectedAgent?.tasks.filter((task) => task.completed).length || 0;
@@ -285,6 +285,8 @@
 		inputValue = "";
 
 		if (isPlanMode && !isExecutingPlan) {
+			const planMode = activeProjectId ? "modify" : "generate";
+			currentPlanPrompt = message;
 			isExecutingPlan = true;
 			specContent = null;
 			planResponse = null;
@@ -302,7 +304,7 @@
 					body: JSON.stringify({
 						message,
 						project_id: activeProjectId,
-						mode: activeProjectId ? "modify" : "generate",
+						mode: planMode,
 					}),
 				});
 				if (res.ok) {
@@ -313,7 +315,7 @@
 					agentRegistry.reset();
 					agentRegistry.isRunning = true;
 					planResponse = "Plan generation in progress...";
-					connectStream(projectId, "auto", "generate", "plan");
+					connectStream(projectId, "auto", data.mode || planMode, "plan");
 				} else {
 					chatHistory = [
 						...chatHistory,
@@ -383,7 +385,7 @@
 
 	async function handleExecutePlan() {
 		if (!specContent || isRunning) return;
-		const message = chatHistory.find((m) => m.role === "user")?.content;
+		const message = currentPlanPrompt || chatHistory.filter((m) => m.role === "user" && m.metadata?.type !== "question_answers").at(-1)?.content;
 		if (!message) return;
 
 		chatHistory = [
@@ -515,14 +517,18 @@
 				}),
 			});
 			if (!res.ok) throw new Error(await res.text());
+			const answerSummary = summarizeAnswers(answeredQuestion, answers);
 			chatHistory = [
 				...chatHistory,
 				{
 					role: "user",
-					content: summarizeAnswers(answeredQuestion, answers),
+					content: answerSummary,
 					metadata: { type: "question_answers", question_id: answeredQuestion.question_id },
 				},
 			];
+			if (isPlanMode) {
+				planAnswerSummaries = [...planAnswerSummaries, answerSummary];
+			}
 			pendingQuestion = null;
 			questionAnswers = [];
 		} catch (e) {
@@ -554,16 +560,6 @@
 	function setPlanMode(next: boolean) {
 		if (isPlanMode === next) return;
 		isPlanMode = next;
-		if (isPlanMode) {
-			chatHistory = [
-				...chatHistory,
-				{
-					role: "assistant",
-					content:
-						"**Plan Mode** activated. When you describe what you want to build, I will create a detailed implementation plan for your review before writing any code.\n\nClick **Execute** to run the plan, or continue chatting to refine it.",
-				},
-			];
-		}
 	}
 
 	function connectStream(
@@ -686,7 +682,7 @@
 		});
 
 		// Auto-open the code view when a build starts so users see files appear live
-		if (mode === "generate" || mode === "approved" || mode === "modify" || uiMode === "plan") {
+		if (uiMode !== "plan" && (mode === "generate" || mode === "approved" || mode === "modify")) {
 			isCodeViewCollapsed = false;
 		}
 		if (!isCodeViewCollapsed) {
@@ -729,6 +725,8 @@
 		editedSpecContent = "";
 		isEditingSpec = false;
 		planResponse = null;
+		currentPlanPrompt = "";
+		planAnswerSummaries = [];
 		showVersionHistory = false;
 	}
 
@@ -749,6 +747,7 @@
 
 		if (normalizedStatus === "planning") {
 			isPlanMode = true;
+			currentPlanPrompt = typeof status.spec?.message === "string" ? status.spec.message : currentPlanPrompt;
 			isExecutingPlan = true;
 			planResponse = "Plan generation in progress...";
 			agentRegistry.isRunning = true;
@@ -758,6 +757,7 @@
 
 		if (normalizedStatus === "plan_ready") {
 			isPlanMode = true;
+			currentPlanPrompt = typeof status.spec?.message === "string" ? status.spec.message : currentPlanPrompt;
 			isExecutingPlan = false;
 			const savedSpec =
 				status.spec_content ||
@@ -1055,7 +1055,15 @@
 		return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 	}
 	function stripThinkTags(content: string): string {
-		return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+		return content
+			.replace(/<(think|thinking|thought|thing)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+			.replace(/<\/?(think|thinking|thought|thing)\b[^>]*>/gi, '')
+			.trim();
+	}
+	function formatThinkingContent(content: string): string {
+		return content
+			.replace(/<\/?(think|thinking|thought|thing)\b[^>]*>/gi, '')
+			.trim();
 	}
 	function extractJsonFromOutput(output: any): any {
 		if (!output) return null;
@@ -1471,7 +1479,7 @@
 		<div class="scroll">
 			<div class="frame">
 				<!-- Project Header -->
-				<div class="proj-head">
+				<div class="proj-head" class:plan-head={isPlanMode}>
 					<span class="eyebrow">
 						{#if activeProjectId}
 							A ── {activeProjectId.slice(0, 8).toUpperCase()}
@@ -1483,7 +1491,7 @@
 						{#if !activeProjectId && !isPlanMode}
 							What would you like to <em>build?</em>
 						{:else if isPlanMode}
-							Planning mode <em>activated</em><br/>Create a detailed implementation plan.
+							Plan the <em>implementation</em>
 						{:else}
 							{#if chatHistory.find(m => m.role === 'user')}
 								{@const firstUser = chatHistory.find(m => m.role === 'user')}
@@ -1511,64 +1519,177 @@
 					</div>
 				{/if}
 
-				<!-- Plan Mode -->
-				{#if isPlanMode && (hasPlanTelemetry || isExecutingPlan || Boolean(planResponse) || Boolean(specContent))}
-					<PlanActivityPanel
-						agents={planAgents}
-						isStreaming={isExecutingPlan || isRunning}
-						hasSpec={Boolean(specContent)}
-						statusLabel={planActivityStatusLabel}
-					/>
-				{/if}
-
-				{#if specContent}
-					<div class="mesh-card" style="margin-top: 24px;">
-						<header>
-							<h3>SPEC.md <small>{planMetrics.lines} LINES · {planMetrics.words} WORDS</small></h3>
-							<div style="display: flex; gap: 8px;">
-								{#if isEditingSpec}
-									<Button variant="outline" size="sm" onclick={handleCancelEditSpec}>Cancel</Button>
-									<Button size="sm" onclick={handleSaveSpec}>Save</Button>
-								{:else}
-									<Button variant="outline" size="sm" onclick={handleEditSpec}>Edit</Button>
-								{/if}
-							</div>
-						</header>
-						{#if isEditingSpec}
-							<div style="display: grid; gap: 16px; grid-template-columns: 1fr 1fr;">
-								<textarea
-									bind:value={editedSpecContent}
-									style="width: 100%; height: 400px; resize: none; border-radius: 12px; border: 1px solid var(--line); background: var(--paper-1); padding: 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--ink-0); outline: none;"
-									placeholder="Edit SPEC.md content..."
-								></textarea>
-								<div style="height: 400px; overflow-y: auto; border-radius: 12px; border: 1px solid var(--line); background: var(--paper-0); padding: 16px;">
-									<PlanSpecPreview source={editedSpecContent} />
+				{#if isPlanMode}
+					<div class="plan-workspace">
+						<Card.Root class="plan-brief" size="sm">
+							<Card.Content class="plan-brief-content">
+								<div>
+									<span class="eyebrow compact">ROOT · PLANNING</span>
+									<h2>{currentPlanPrompt || 'Describe the project or change to plan.'}</h2>
 								</div>
-							</div>
-						{:else}
-							<div style="max-height: 560px; overflow-y: auto; border-radius: 12px; border: 1px solid var(--line); background: var(--paper-0); padding: 16px;">
-								<PlanSpecPreview source={editedSpecContent || specContent} />
+								<div class="plan-brief-stats">
+									<span>{planActivityStatusLabel}</span>
+									<span>{planMetrics.lines} lines</span>
+									<span>{planMetrics.words} words</span>
+								</div>
+							</Card.Content>
+						</Card.Root>
+
+						{#if pendingQuestion}
+							<div class="question-wrap plan-question">
+								<Card.Root class="question-panel">
+									<Card.Header class="question-head">
+										<span class="question-kicker">ROOT · FOLLOW-UP</span>
+										<Card.Title class="question-title">Planning preferences</Card.Title>
+										<Card.Description class="question-description">Answers are sent back to the planner and saved with this project.</Card.Description>
+									</Card.Header>
+
+									<Card.Content class="question-list">
+										{#each pendingQuestion.questions as question, i}
+											<div class="question-item">
+												<div class="question-label-row">
+													<label for={`agent-question-${i}`}>{question.label}</label>
+													<span>{question.type.replace('_', ' ')}</span>
+												</div>
+												{#if question.help}
+													<p class="question-help">{question.help}</p>
+												{/if}
+
+												{#if question.type === 'single_select' || question.type === 'boolean'}
+													<div class="question-options">
+														{#each (question.options.length ? question.options : ['Yes', 'No']) as option}
+															<Button type="button" variant="outline" size="sm" class={questionAnswers[i] === option ? 'question-option selected' : 'question-option'} onclick={() => setQuestionAnswer(i, option)}>
+																{option}
+															</Button>
+														{/each}
+													</div>
+													<Input id={`agent-question-${i}`} class="question-input" value={questionAnswers[i]} oninput={(e) => setQuestionAnswer(i, e.currentTarget.value)} placeholder="Custom preference" />
+												{:else if question.type === 'multi_select'}
+													<div class="question-options multi">
+														{#each question.options as option}
+															<Button type="button" variant="outline" size="sm" class={selectedMultiValues(i).includes(option) ? 'question-option selected' : 'question-option'} onclick={() => toggleMultiAnswer(i, option)}>
+																{option}
+															</Button>
+														{/each}
+													</div>
+													<Input id={`agent-question-${i}`} class="question-input" value={questionAnswers[i]} oninput={(e) => setQuestionAnswer(i, e.currentTarget.value)} placeholder="Selected values or custom answer" />
+												{:else if question.type === 'textarea'}
+													<Textarea id={`agent-question-${i}`} class="question-textarea" value={questionAnswers[i]} oninput={(e) => setQuestionAnswer(i, e.currentTarget.value)} placeholder="Details to preserve in the plan" rows={4} />
+												{:else}
+													<Input id={`agent-question-${i}`} class="question-input" value={questionAnswers[i]} oninput={(e) => setQuestionAnswer(i, e.currentTarget.value)} placeholder="Your answer" />
+												{/if}
+											</div>
+										{/each}
+									</Card.Content>
+
+									<Card.Footer class="question-actions">
+										<span class="question-count">{pendingQuestion.questions.length} preference{pendingQuestion.questions.length === 1 ? '' : 's'} requested</span>
+										<Button type="button" class="question-submit" onclick={submitAnswers} disabled={isSubmittingAnswers || !canSubmitPendingQuestion()}>
+											{#if isSubmittingAnswers}
+												<Loader2 size={14} class="animate-spin" />
+											{:else}
+												<ArrowRight size={13} />
+											{/if}
+											Submit
+										</Button>
+									</Card.Footer>
+								</Card.Root>
 							</div>
 						{/if}
-						<div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center;">
-							<span style="font-size: 12.5px; color: var(--ink-4);">Review the plan before execution.</span>
-							<div style="display: flex; gap: 8px;">
-								<Button variant="outline" onclick={() => { specContent = null; editedSpecContent = ''; planResponse = null; isEditingSpec = false; }}>Discard</Button>
-								<Button onclick={handleExecutePlan} disabled={isExecutingPlan || isRunning}>
-									{#if isExecutingPlan}
-										<Loader2 class="h-4 w-4 animate-spin mr-2" />
-									{:else}
-										<Play class="h-4 w-4 mr-2" />
-									{/if}
-									Approve & Execute
-								</Button>
-							</div>
-						</div>
-					</div>
-				{/if}
 
-				<!-- Build Mode -->
-				{#if !isPlanMode}
+						{#if planAnswerSummaries.length > 0}
+							<Card.Root class="plan-answer-log" size="sm">
+								<Card.Header>
+									<Card.Title>Saved preferences</Card.Title>
+								</Card.Header>
+								<Card.Content>
+									{#each planAnswerSummaries as summary}
+										<pre>{summary}</pre>
+									{/each}
+								</Card.Content>
+							</Card.Root>
+						{/if}
+
+						{#if hasPlanTelemetry || isExecutingPlan || Boolean(planResponse) || Boolean(specContent)}
+							<PlanActivityPanel
+								agents={planAgents}
+								isStreaming={isExecutingPlan || isRunning}
+								hasSpec={Boolean(specContent)}
+								statusLabel={planActivityStatusLabel}
+							/>
+						{/if}
+
+						{#if specContent}
+							<Card.Root class="plan-spec-card">
+								<Card.Header class="plan-spec-head">
+									<div>
+										<span class="eyebrow compact">SPEC.md</span>
+										<Card.Title>Implementation plan</Card.Title>
+										<Card.Description>{planMetrics.lines} lines · {planMetrics.words} words · {planMetrics.headings} sections</Card.Description>
+									</div>
+									<div class="plan-actions">
+										{#if isEditingSpec}
+											<Button variant="outline" size="sm" onclick={handleCancelEditSpec}>Cancel</Button>
+											<Button size="sm" onclick={handleSaveSpec}>Save</Button>
+										{:else}
+											<Button variant="outline" size="sm" onclick={handleEditSpec}>Edit</Button>
+										{/if}
+									</div>
+								</Card.Header>
+								<Card.Content>
+									{#if isEditingSpec}
+										<div class="spec-edit-grid">
+											<Textarea
+												bind:value={editedSpecContent}
+												class="spec-editor"
+												placeholder="Edit SPEC.md content"
+											/>
+											<ScrollArea class="spec-preview-scroll">
+												<PlanSpecPreview source={editedSpecContent} />
+											</ScrollArea>
+										</div>
+									{:else}
+										<ScrollArea class="spec-review-scroll">
+											<PlanSpecPreview source={editedSpecContent || specContent} />
+										</ScrollArea>
+									{/if}
+								</Card.Content>
+								<Card.Footer class="plan-spec-footer">
+									<span>Review before implementation starts.</span>
+									<div class="plan-footer-actions">
+										<Button
+											variant="outline"
+											class="plan-discard-btn"
+											onclick={() => { specContent = null; editedSpecContent = ''; planResponse = null; isEditingSpec = false; }}
+										>
+											Discard
+										</Button>
+										<Button
+											variant="outline"
+											class="plan-approve-btn"
+											onclick={handleExecutePlan}
+											disabled={isExecutingPlan || isRunning}
+										>
+											{#if isExecutingPlan}
+												<Loader2 class="h-4 w-4 animate-spin mr-2" />
+											{:else}
+												<Play class="h-4 w-4 mr-2" />
+											{/if}
+											Approve & Execute
+										</Button>
+									</div>
+								</Card.Footer>
+							</Card.Root>
+						{:else if !isExecutingPlan && !hasPlanTelemetry}
+							<Card.Root class="plan-empty" size="sm">
+								<Card.Content>
+									<span class="eyebrow compact">READY</span>
+									<p>Enter the feature, product, or change request below to create a reviewable SPEC.md before implementation.</p>
+								</Card.Content>
+							</Card.Root>
+						{/if}
+					</div>
+				{:else}
 					<!-- Mesh Grid -->
 					<div class="mesh-card">
 						<header>
@@ -1679,7 +1800,7 @@
 			</div>
 
 			<!-- Question Card -->
-			{#if pendingQuestion}
+			{#if pendingQuestion && !isPlanMode}
 				<div class="question-wrap">
 					<Card.Root class="question-panel">
 						<Card.Header class="question-head">
@@ -1787,14 +1908,14 @@
 		<!-- Composer -->
 		<div class="composer-wrap">
 			<div class="quick">
-				<button type="button" onclick={() => inputValue = 'Build a task manager with Spring Boot and Svelte'}>
-					<span>01</span> Task manager
+				<button type="button" onclick={() => inputValue = isPlanMode ? 'Plan a production-ready task manager with Spring Boot and Svelte' : 'Build a task manager with Spring Boot and Svelte'}>
+					<span>01</span> {isPlanMode ? 'Plan task manager' : 'Task manager'}
 				</button>
-				<button type="button" onclick={() => inputValue = 'Add Stripe billing and user authentication'}>
-					<span>02</span> Stripe billing
+				<button type="button" onclick={() => inputValue = isPlanMode ? 'Plan Stripe billing, authentication, and admin roles before implementation' : 'Add Stripe billing and user authentication'}>
+					<span>02</span> {isPlanMode ? 'Plan billing' : 'Stripe billing'}
 				</button>
-				<button type="button" onclick={() => inputValue = 'Create a REST API with CRUD operations'}>
-					<span>03</span> REST API
+				<button type="button" onclick={() => inputValue = isPlanMode ? 'Review the existing codebase and plan a safe REST API change' : 'Create a REST API with CRUD operations'}>
+					<span>03</span> {isPlanMode ? 'Plan API change' : 'REST API'}
 				</button>
 			</div>
 			<form
@@ -1806,7 +1927,9 @@
 			>
 				<textarea
 					bind:value={inputValue}
-					placeholder={activeProjectId
+					placeholder={isPlanMode
+						? "Describe what should be planned before code is written..."
+						: activeProjectId
 						? "Ask for a modification... (e.g., Add Stripe billing and an admin dashboard)"
 						: "Describe your project... (e.g., Build a task manager with Spring Boot and Svelte)"}
 					disabled={isRunning}
@@ -1820,8 +1943,13 @@
 				></textarea>
 				<div class="composer-foot">
 					<span class="chip on">
-						<Hexagon size={13} />
-						<span class="l">BUILD</span>
+						{#if isPlanMode}
+							<Map size={13} />
+							<span class="l">PLAN</span>
+						{:else}
+							<Hexagon size={13} />
+							<span class="l">BUILD</span>
+						{/if}
 					</span>
 					<span class="chip">
 						<Eye size={13} />
@@ -1867,7 +1995,7 @@
 				onRestore={handleVersionRestore}
 			/>
 		</aside>
-	{:else if selectedAgent && !isPlanMode}
+	{:else if selectedAgent}
 		<aside class="agent-pane">
 			<div class="ap-head">
 				<span class="ix">AGENT · DETAIL</span>
@@ -1906,12 +2034,12 @@
 
 			<div class="ap-body" bind:this={agentDetailBody} onscroll={handleAgentDetailScroll}>
 				{#if agentDetailTab === 'timeline'}
-					{@const displayEvents = selectedAgent.events.filter(e => e.type !== 'thinking' && e.type !== 'reasoning').reverse()}
+					{@const displayEvents = selectedAgent.events.filter(e => e.type !== 'thinking' && e.type !== 'reasoning')}
 					<div class="timeline">
 						{#each displayEvents as event, i}
 							{@const isPending = event.type === 'tool_start'}
 							{@const toolView = formatToolView(event)}
-							<div class="ev {isPending ? 'pending' : (i === 0 ? 'curr' : 'done')}">
+							<div class="ev {isPending ? 'pending' : (i === displayEvents.length - 1 ? 'curr' : 'done')}">
 								<div class="tm">{formatTime(event.timestamp)}</div>
 								{#if toolView}
 										<div class="tool-event-card {toolView.phase}">
@@ -1960,14 +2088,14 @@
 					</div>
 				{:else if agentDetailTab === 'thinking'}
 					{@const thinkingEvents = selectedAgent.events
-						.filter(e => (e.type === 'thinking' || e.type === 'reasoning') && stripThinkTags(e.content || '').trim())}
+						.filter(e => (e.type === 'thinking' || e.type === 'reasoning') && formatThinkingContent(e.content || '').trim())}
 					<div class="timeline">
 						{#each thinkingEvents as event, i}
 							<div class="ev {i === thinkingEvents.length - 1 ? 'curr' : 'done'}">
 								<div class="tm">{formatTime(event.timestamp)}</div>
 								<div class="ti">Reasoning</div>
 								<div class="body markdown-think">
-									<MarkdownContent source={stripThinkTags(event.content || '')} />
+									<MarkdownContent source={formatThinkingContent(event.content || '')} />
 								</div>
 							</div>
 						{:else}
@@ -2115,6 +2243,243 @@
 	.proj-head h1 em { font-style: italic; color: var(--violet-d); }
 	.proj-head .meta-row { display: flex; gap: 18px; align-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--ink-4); letter-spacing: 0.06em; flex-wrap: wrap; }
 	.proj-head .meta-row b { color: var(--ink-1); font-weight: 500; }
+	.proj-head.plan-head { margin-bottom: 18px; }
+	.proj-head.plan-head h1 { font-size: 46px; }
+	.eyebrow.compact { color: var(--violet-d); font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; }
+
+	.plan-workspace {
+		display: flex;
+		flex-direction: column;
+		gap: 14px;
+		position: relative;
+	}
+	.plan-workspace::before {
+		content: "";
+		position: absolute;
+		inset: -18px -18px auto;
+		height: 260px;
+		border-radius: 28px;
+		background:
+			radial-gradient(50% 80% at 0% 10%, oklch(85% 0.10 295 / 0.40), transparent 64%),
+			radial-gradient(45% 70% at 100% 0%, oklch(88% 0.09 220 / 0.36), transparent 64%),
+			radial-gradient(70% 90% at 50% 100%, oklch(90% 0.06 75 / 0.24), transparent 68%);
+		pointer-events: none;
+		z-index: -1;
+	}
+	.plan-brief,
+	.plan-spec-card,
+	.plan-answer-log,
+	.plan-empty {
+		background: rgba(255,255,255,0.62);
+		border: 1px solid rgba(255,255,255,0.62);
+		border-radius: 22px;
+		box-shadow: var(--shadow-2);
+		backdrop-filter: blur(24px) saturate(140%);
+		-webkit-backdrop-filter: blur(24px) saturate(140%);
+		overflow: hidden;
+	}
+	.plan-brief {
+		position: relative;
+		background:
+			linear-gradient(135deg, rgba(255,255,255,0.82), rgba(255,255,255,0.46)),
+			radial-gradient(90% 160% at 100% 0%, oklch(78% 0.14 295 / 0.24), transparent 60%);
+	}
+	.plan-brief::after {
+		content: "";
+		position: absolute;
+		inset: 0;
+		background-image:
+			linear-gradient(var(--ink-0) 1px, transparent 1px),
+			linear-gradient(60deg, var(--ink-0) 1px, transparent 1px),
+			linear-gradient(-60deg, var(--ink-0) 1px, transparent 1px);
+		background-size: 34px 58px;
+		opacity: 0.025;
+		pointer-events: none;
+	}
+	.plan-brief-content {
+		display: flex;
+		justify-content: space-between;
+		gap: 20px;
+		align-items: flex-end;
+		padding: 22px;
+		position: relative;
+		z-index: 1;
+	}
+	:global(.plan-brief h2) {
+		max-width: 680px;
+		margin: 8px 0 0;
+		font-family: var(--font-display);
+		font-weight: 400;
+		font-size: 35px;
+		line-height: 1;
+		letter-spacing: -0.018em;
+		color: var(--ink-0);
+	}
+	.plan-brief-stats {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 7px;
+		flex-shrink: 0;
+	}
+	.plan-brief-stats span {
+		border: 1px solid rgba(255,255,255,0.72);
+		border-radius: 999px;
+		background: rgba(255,255,255,0.64);
+		padding: 5px 10px;
+		font-family: var(--font-mono);
+		font-size: 10.5px;
+		letter-spacing: 0.06em;
+		color: var(--ink-4);
+		box-shadow: 0 1px 0 rgba(255,255,255,0.55) inset;
+		white-space: nowrap;
+	}
+	.plan-question { padding: 0; margin: 0; max-width: none; }
+	.plan-answer-log :global([data-slot="card-title"]) { font-size: 13px; font-weight: 600; color: var(--ink-1); }
+	.plan-answer-log :global([data-slot="card-header"]) { padding: 14px 16px 0; }
+	.plan-answer-log :global([data-slot="card-content"]) { display: grid; gap: 8px; padding: 12px 16px 16px; }
+	.plan-answer-log pre {
+		margin: 0;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: rgba(255,255,255,0.62);
+		padding: 10px 12px;
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+		line-height: 1.55;
+		color: var(--ink-3);
+		white-space: pre-wrap;
+	}
+	.plan-spec-card {
+		background:
+			linear-gradient(180deg, rgba(255,255,255,0.78), rgba(255,255,255,0.58)),
+			var(--paper-0);
+	}
+	.plan-spec-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: 16px;
+		padding: 20px 22px 14px;
+		border-bottom: 1px solid rgba(255,255,255,0.70);
+		background:
+			radial-gradient(85% 160% at 100% 0%, oklch(82% 0.12 220 / 0.20), transparent 60%),
+			rgba(255,255,255,0.34);
+	}
+	.plan-spec-head :global([data-slot="card-title"]) {
+		margin-top: 6px;
+		font-family: var(--font-display);
+		font-size: 34px;
+		font-weight: 400;
+		line-height: 1;
+		letter-spacing: -0.018em;
+		color: var(--ink-0);
+	}
+	.plan-spec-head :global([data-slot="card-description"]) {
+		margin-top: 6px;
+		color: var(--ink-4);
+		font-size: 12.5px;
+	}
+	.plan-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+	.plan-spec-card :global([data-slot="card-content"]) { padding: 16px; }
+	.spec-edit-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+	.spec-editor {
+		min-height: 520px;
+		height: 520px;
+		resize: vertical;
+		border-radius: 14px;
+		background: rgba(255,255,255,0.68);
+		border-color: var(--line);
+		font-family: var(--font-mono);
+		font-size: 12px;
+		line-height: 1.65;
+		color: var(--ink-1);
+	}
+	.spec-preview-scroll,
+	.spec-review-scroll {
+		height: 520px;
+		border: 1px solid var(--line);
+		border-radius: 14px;
+		background: rgba(255,255,255,0.70);
+		box-shadow: 0 1px 0 rgba(255,255,255,0.70) inset;
+	}
+	.spec-review-scroll { height: 640px; }
+	.plan-spec-footer {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 14px;
+		padding: 16px;
+		border-top: 1px solid rgba(255,255,255,0.70);
+		background:
+			linear-gradient(180deg, rgba(255,255,255,0.42), rgba(255,255,255,0.70)),
+			radial-gradient(90% 160% at 100% 0%, oklch(78% 0.14 295 / 0.14), transparent 62%);
+	}
+	:global(.plan-spec-footer > span) {
+		color: var(--ink-4);
+		font-size: 12.5px;
+	}
+	.plan-footer-actions {
+		margin-left: auto;
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+		flex-wrap: wrap;
+	}
+	:global(.plan-spec-footer .plan-discard-btn) {
+		height: 36px;
+		border-radius: 999px;
+		border-color: var(--line);
+		background: rgba(255,255,255,0.58);
+		color: var(--ink-4);
+		padding: 0 15px;
+		font-size: 12.5px;
+		font-weight: 500;
+		box-shadow: 0 1px 0 rgba(255,255,255,0.68) inset;
+	}
+	:global(.plan-spec-footer .plan-discard-btn:hover) {
+		background: rgba(255,255,255,0.86);
+		color: var(--ink-1);
+		border-color: var(--line-strong);
+	}
+	:global(.plan-spec-footer .plan-approve-btn) {
+		height: 38px;
+		border-radius: 999px;
+		border: 1px solid oklch(48% 0.16 152 / 0.42) !important;
+		background: linear-gradient(180deg, oklch(74% 0.17 152), oklch(49% 0.16 152)) !important;
+		color: white !important;
+		padding: 0 18px;
+		font-size: 12.5px;
+		font-weight: 600;
+		box-shadow:
+			0 1px 0 rgba(255,255,255,0.38) inset,
+			0 -1px 0 rgba(0,0,0,0.16) inset,
+			0 12px 28px oklch(54% 0.15 152 / 0.26),
+			0 0 0 1px oklch(54% 0.15 152 / 0.10);
+	}
+	:global(.plan-spec-footer .plan-approve-btn:hover:not(:disabled)) {
+		background: linear-gradient(180deg, oklch(78% 0.17 152), oklch(52% 0.16 152)) !important;
+		transform: translateY(-1px);
+		box-shadow:
+			0 1px 0 rgba(255,255,255,0.42) inset,
+			0 -1px 0 rgba(0,0,0,0.16) inset,
+			0 16px 36px oklch(54% 0.15 152 / 0.34),
+			0 0 0 1px oklch(54% 0.15 152 / 0.18);
+	}
+	:global(.plan-spec-footer .plan-approve-btn:disabled) {
+		opacity: 0.58;
+		box-shadow: none;
+	}
+	.plan-empty :global([data-slot="card-content"]) {
+		padding: 20px 22px;
+	}
+	:global(.plan-empty p) {
+		margin: 8px 0 0;
+		font-size: 14px;
+		line-height: 1.55;
+		color: var(--ink-3);
+	}
 
 	.mesh-card { background: var(--paper-0); border: 1px solid var(--line); border-radius: 24px; padding: 22px; box-shadow: var(--shadow-2); }
 	.mesh-card header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 16px; flex-wrap: wrap; }
