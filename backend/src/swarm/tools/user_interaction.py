@@ -31,15 +31,96 @@ ANSWER_TIMEOUT_SECONDS = int(os.getenv("ASK_USER_TIMEOUT_SECONDS", "300"))
 POLL_INTERVAL_SECONDS = 1.0
 
 
+def _split_options(raw: str) -> list[str]:
+    return [
+        part.strip(" \t\n\r-•")
+        for part in raw.replace(" / ", ",").replace(" or ", ",").split(",")
+        if part.strip(" \t\n\r-•")
+    ]
+
+
+def _normalize_question(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        label = str(raw.get("label") or raw.get("question") or raw.get("text") or "").strip()
+        raw_type = str(raw.get("type") or raw.get("kind") or raw.get("input_type") or "text").lower()
+        options_raw = raw.get("options") or raw.get("choices") or []
+        options = [
+            str(option.get("label") if isinstance(option, dict) else option).strip()
+            for option in options_raw
+            if str(option.get("label") if isinstance(option, dict) else option).strip()
+        ]
+        mapped_type = {
+            "select": "single_select",
+            "radio": "single_select",
+            "choice": "single_select",
+            "choices": "single_select",
+            "checkbox": "multi_select",
+            "checkboxes": "multi_select",
+            "multi": "multi_select",
+            "multiselect": "multi_select",
+            "long_text": "textarea",
+            "boolean": "boolean",
+            "yes_no": "boolean",
+        }.get(raw_type, raw_type)
+        if mapped_type not in {"text", "textarea", "single_select", "multi_select", "boolean"}:
+            mapped_type = "single_select" if options else "text"
+        return {
+            "id": str(raw.get("id") or f"q_{abs(hash(label)) % 100000}"),
+            "label": label,
+            "type": mapped_type,
+            "options": options,
+            "required": bool(raw.get("required", True)),
+            "help": str(raw.get("help") or raw.get("description") or "").strip(),
+        }
+
+    label = str(raw).strip()
+    lower = label.lower()
+    options: list[str] = []
+    qtype = "text"
+
+    for marker in ("options:", "choices:", "choose one:", "select one:"):
+        if marker in lower:
+            start = lower.index(marker) + len(marker)
+            options = _split_options(label[start:])
+            qtype = "single_select"
+            break
+
+    if not options:
+        import re
+
+        match = re.search(r"\((?:e\.g\.|for example)\s+([^)]+)\)", label, flags=re.IGNORECASE)
+        if match:
+            options = _split_options(match.group(1))
+            if len(options) >= 2 and any(word in lower for word in ("which", "what", "choose", "select", "prefer", "should i use")):
+                qtype = "single_select"
+
+    if "select all" in lower or "choose all" in lower or "multiple" in lower:
+        qtype = "multi_select" if options else "textarea"
+    elif qtype == "text" and lower.startswith(("do ", "does ", "should ", "would ", "is ", "are ", "can ")):
+        qtype = "boolean"
+        options = ["Yes", "No"]
+    elif qtype == "text" and any(word in lower for word in ("describe", "details", "requirements", "constraints", "notes")):
+        qtype = "textarea"
+
+    return {
+        "id": f"q_{abs(hash(label)) % 100000}",
+        "label": label,
+        "type": qtype,
+        "options": options,
+        "required": True,
+        "help": "",
+    }
+
+
 @tool
-async def ask_user(questions: list[str]) -> str:
+async def ask_user(questions: list[Any]) -> str:
     """Ask the user one or more questions and wait for their answers.
 
     Use this tool when you need information from the user that is required
     to continue (e.g., preferred tech stack, language, database engine).
 
     Args:
-        questions: A list of question strings to present to the user.
+        questions: A list of question strings or structured question objects.
 
     Returns:
         A JSON string with a 'answers' key containing the user's responses
@@ -52,12 +133,15 @@ async def ask_user(questions: list[str]) -> str:
     question_id = str(uuid.uuid4())
     answer_key = f"project:{project_id}:questions:{question_id}:answers"
     channel = f"project:{project_id}:events"
+    question_items = [_normalize_question(question) for question in questions]
 
     event_payload = json.dumps({
         "type": "question",
         "data": {
             "question_id": question_id,
-            "questions": questions,
+            "questions": [item["label"] for item in question_items],
+            "question_items": question_items,
+            "schema_version": 2,
         },
     })
 

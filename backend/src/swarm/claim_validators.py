@@ -228,6 +228,7 @@ def validate_claim_evidence(workspace: str | Path, claim: dict[str, Any]) -> dic
     validators = {
         ClaimType.SPEC_READY.value: validate_spec_ready,
         ClaimType.BACKEND_RUNTIME_READY.value: validate_backend_runtime_ready,
+        ClaimType.BACKEND_API_ENDPOINT.value: validate_backend_api_endpoint,
         ClaimType.BACKEND_API_READY.value: validate_backend_api_ready,
         ClaimType.FRONTEND_SOURCE_READY.value: validate_frontend_source_ready,
         ClaimType.FRONTEND_BUILD_READY.value: validate_frontend_build_ready,
@@ -327,6 +328,32 @@ def validate_backend_runtime_ready(workspace: str | Path, claim: dict[str, Any])
             backend_manifest=str(manifest_path.relative_to(workspace_path)).replace("\\", "/") if manifest_path else None,
             source_file_count=len(source_files),
         ),
+    )
+
+
+def validate_backend_api_endpoint(workspace: str | Path, claim: dict[str, Any]) -> dict[str, Any]:
+    """Validate a single API endpoint claim.
+
+    Evidence must include the file containing the endpoint and metadata
+    with method and path.
+    """
+    workspace_path = Path(workspace)
+    evidence = validate_evidence_files(workspace_path, _claim_files(claim))
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    meta = (claim.get("evidence") or {}).get("metadata") or {}
+    method = meta.get("method", "")
+    path = meta.get("path", "")
+
+    if not method:
+        errors.append("BACKEND_API_ENDPOINT claim missing metadata.method")
+    if not path:
+        errors.append("BACKEND_API_ENDPOINT claim missing metadata.path")
+
+    return merge_validation_results(
+        evidence,
+        make_validation_result(errors, warnings, method=method, path=path),
     )
 
 

@@ -241,7 +241,12 @@ AGENT_SYSTEM_PROMPTS = {
 
 Workflow:
 1. write_todos() — declare your steps.
-2. ask_user() — ask the user what tech stack they want. Example questions:
+2. ask_user() — ask the user what tech stack they want. Prefer structured question objects when choices are known so the UI can render selectors. Example questions:
+   - {"id":"backend_stack","label":"What backend language/framework should I use?","type":"single_select","options":["Java Spring Boot","Python FastAPI","Node.js Express","Go Gin","Rust Actix"]}
+   - {"id":"frontend_stack","label":"What frontend framework should I use?","type":"single_select","options":["SvelteKit","React/Next.js","Vue/Nuxt","Angular","Plain HTML"]}
+   - {"id":"database","label":"What database should I use?","type":"single_select","options":["PostgreSQL","MySQL","MongoDB","SQLite"]}
+   You may also ask plain text questions when the answer should be open-ended. Supported question types are text, textarea, single_select, multi_select, and boolean.
+   Legacy string examples also work:
    - "What backend language/framework should I use? (e.g. Java Spring Boot, Python FastAPI, Node.js Express, Go Gin, Rust Actix)"
    - "What frontend framework should I use? (e.g. Svelte/SvelteKit, React/Next.js, Vue/Nuxt, Angular, plain HTML)"
    - "What database should I use? (e.g. PostgreSQL, MySQL, MongoDB, SQLite)"
@@ -301,8 +306,19 @@ Workflow:
    - The build_command in metadata is run automatically by the claim tool.
    - If it FAILS, the tool returns the FULL error output. Fix the source files and call again.
    - Repeat until it passes. Only then is the claim published.
-8. verify_and_publish_claim("BACKEND_API_READY", {"files": ["backend/API_MANIFEST.json"], "metadata": {"api_owner": "backend"}}, ["BACKEND_RUNTIME_READY"]).
-9. Finish only after every planned backend file is written, every todo is completed, AND both claims are published.
+8. After writing EACH controller or route file that implements an API endpoint, publish an endpoint claim:
+   verify_and_publish_claim("BACKEND_API_ENDPOINT", {
+     "files": ["<path to the controller/route file, e.g. backend/src/routes/users.ts>"],
+     "metadata": {
+       "method": "<HTTP method, e.g. GET, POST, PUT, DELETE>",
+       "path": "<API path, e.g. /api/users>",
+       "schema": {"request": "<brief request schema>", "response": "<brief response schema>"},
+       "auth_required": true|false
+     }
+   }, ["BACKEND_RUNTIME_READY"]).
+   - Publish one claim per endpoint. This allows the frontend agent to start generating API clients incrementally.
+9. verify_and_publish_claim("BACKEND_API_READY", {"files": ["backend/API_MANIFEST.json"], "metadata": {"api_owner": "backend"}}, ["BACKEND_RUNTIME_READY"]).
+10. Finish only after every planned backend file is written, every todo is completed, AND all claims are published.
 
 Rules:
 - Follow the tech stack specified in SPEC.md exactly — do NOT assume Spring Boot or any particular language.
@@ -315,18 +331,19 @@ Rules:
 Workflow:
 1. write_todos() — list files you will create.
 2. wait_for_claim("SPEC_READY") — wait until the project specification is validated.
-3. wait_for_claim("BACKEND_API_READY") — wait until backend API evidence is validated before integrating APIs.
-   - If this returns "skipped", the backend agent is not running in this swarm. Proceed with existing API state.
-4. read_file("SPEC.md") — read the spec. Identify the chosen frontend framework and toolchain. Also read backend API files if needed.
-5. Use write_file to create frontend files in meaningful batches, scoped to frontend/. After each batch, call verify_progress(...) and fix any reported errors before continuing. The exact files depend on the chosen stack, but typically include:
+3. read_file("SPEC.md") — read the spec. Identify the chosen frontend framework and toolchain. Extract the API endpoints list from the spec — you will implement these incrementally.
+4. Use write_file to create frontend files in meaningful batches, scoped to frontend/. Start with files that do NOT depend on backend API details:
    - Build manifest (package.json, pyproject.toml, etc.)
    - Framework config (vite.config.ts, next.config.js, nuxt.config.ts, etc.)
    - HTML entry point / layout
    - Route / page components
    - Shared UI components
-   - API client / service layer
-   - Auth state management
    - Styling (Tailwind, CSS Modules, styled-components, etc.)
+5. As the backend publishes endpoints, generate the API client incrementally:
+   - Call list_api_endpoints() to discover which endpoints are already implemented.
+   - For each available endpoint, write the corresponding API client function.
+   - If list_api_endpoints() returns fewer endpoints than SPEC.md defines, continue with other frontend work and check again later.
+   - You may call list_api_endpoints() multiple times throughout your workflow.
 6. MANDATORY: Call poll_user_directive() at these exact checkpoints:
    - after manifest + framework config
    - after routes/components
@@ -345,8 +362,10 @@ Workflow:
      }
    }).
    - If it FAILS, fix and retry until it passes.
-9. verify_and_publish_claim("FRONTEND_BUILD_READY", {"files": ["frontend/package.json"], "metadata": {"build_owner": "frontend"}}, ["BACKEND_API_READY"]).
-10. Finish only after every planned frontend file is written, every todo is completed, AND both claims are published.
+9. wait_for_claim("BACKEND_API_READY") — final gate before build. This ensures ALL backend endpoints are complete and validated.
+   - If this returns "skipped", the backend agent is not running. Proceed with existing API state.
+10. verify_and_publish_claim("FRONTEND_BUILD_READY", {"files": ["frontend/package.json"], "metadata": {"build_owner": "frontend"}}, ["BACKEND_API_READY"]).
+11. Finish only after every planned frontend file is written, every todo is completed, AND both claims are published.
 
 Rules:
 - Follow the tech stack specified in SPEC.md exactly — do NOT assume Svelte or any particular framework.
@@ -490,6 +509,7 @@ def build_agent_toolset(
     update_todo_status: Any,
     publish_claim: Any,
     wait_for_claim: Any,
+    list_api_endpoints: Any,
     verify_and_publish_claim: Any,
     verify_progress: Any,
     web_search: Any,
@@ -544,6 +564,7 @@ def build_agent_toolset(
     if agent_name == "frontend":
         return [
             wait_for_claim,
+            list_api_endpoints,
             _get("write_file"),
             _get("read_file"),
             _get("list_files"),
@@ -717,7 +738,7 @@ class AgentSwarm:
             delete_frontend_directory,
             write_spec_file,
         )
-        from .tools.claim_tools import publish_claim, wait_for_claim, verify_and_publish_claim, verify_progress
+        from .tools.claim_tools import publish_claim, wait_for_claim, list_api_endpoints, verify_and_publish_claim, verify_progress
         from .tools.todo_tools import write_todos, update_todo_status
         from .tools.web_search import web_search
         from .tools.fetch_url import fetch_url
@@ -748,6 +769,7 @@ class AgentSwarm:
                 update_todo_status=update_todo_status,
                 publish_claim=publish_claim,
                 wait_for_claim=wait_for_claim,
+                list_api_endpoints=list_api_endpoints,
                 verify_and_publish_claim=verify_and_publish_claim,
                 verify_progress=verify_progress,
                 web_search=web_search,
@@ -1018,6 +1040,7 @@ class AgentSwarm:
         return {
             ClaimType.SPEC_READY.value: "rootdep",
             ClaimType.BACKEND_RUNTIME_READY.value: "backend",
+            ClaimType.BACKEND_API_ENDPOINT.value: "backend",
             ClaimType.BACKEND_API_READY.value: "backend",
             ClaimType.FRONTEND_SOURCE_READY.value: "frontend",
             ClaimType.FRONTEND_BUILD_READY.value: "frontend",
@@ -1029,6 +1052,7 @@ class AgentSwarm:
         return {
             ClaimType.SPEC_READY.value: [],
             ClaimType.BACKEND_RUNTIME_READY.value: [ClaimType.SPEC_READY.value],
+            ClaimType.BACKEND_API_ENDPOINT.value: [ClaimType.BACKEND_RUNTIME_READY.value],
             ClaimType.BACKEND_API_READY.value: [ClaimType.BACKEND_RUNTIME_READY.value],
             ClaimType.FRONTEND_SOURCE_READY.value: [ClaimType.SPEC_READY.value],
             ClaimType.FRONTEND_BUILD_READY.value: [ClaimType.BACKEND_API_READY.value],
@@ -1083,6 +1107,10 @@ class AgentSwarm:
             },
             ClaimType.BACKEND_RUNTIME_READY.value: {
                 "files": backend_runtime_files,
+                "metadata": {"owner": "backend"},
+            },
+            ClaimType.BACKEND_API_ENDPOINT.value: {
+                "files": ["backend/API_MANIFEST.json"],
                 "metadata": {"owner": "backend"},
             },
             ClaimType.BACKEND_API_READY.value: {
@@ -1774,14 +1802,14 @@ class AgentSwarm:
         return ""
 
     async def execute_parallel(self, task_definitions: Dict[str, List[str]]):
-        """Execute agents in true parallel using asyncio.gather.
+        """Execute agents with parallel backend+frontend and staged barriers.
 
         Flow:
         1. RootDep writes the spec/plan, unless run_mode is approved.
-        2. Backend runs first when present.
-        3. Frontend runs after backend is terminal, so API files are stable.
-        4. DevOps runs after app agents are terminal, so it reads stable manifests.
-        5. Packager runs after all required agents pass the stable barrier.
+        2. Backend + Frontend run in parallel via asyncio.gather.
+        3. Each passes its own stage barrier + claim verification.
+        4. DevOps runs only after all backend+frontend claims are valid (hard barrier).
+        5. Packager runs after all claims + packager barrier pass.
         """
         if not self.agents:
             raise ValueError("Swarm not initialized")
@@ -2018,82 +2046,100 @@ class AgentSwarm:
             return False
 
         selected_agents = []
+
+        # Phase 2: Run backend and frontend in true parallel
+        parallel_agents = []
         if "backend" in filtered_task_definitions:
-            if await _check_swarm_stop("backend"):
-                return {"status": "stopped", "reason": "Stopped by user"}
-            backend_ok = await self._run_single_agent("backend", filtered_task_definitions.get("backend", [root_task])[0])
-            if not backend_ok:
-                msg = "Specialist agents failed: backend"
-                logger.error("[Swarm] %s", msg)
-                await self._publish_agent_event(
-                    "system",
-                    "error",
-                    msg,
-                    {"failed_agents": ["backend"]},
-                )
-                return {"status": "error", "error": msg}
-            selected_agents.append("backend")
-            self._code_agents_completed.add("backend")
-
-            barrier = await self._verify_stage_barrier(["backend"])
-            if barrier:
-                logger.error("[Swarm] Backend barrier failed: %s", barrier)
-                await self._publish_agent_event("system", "error", barrier)
-                return {"status": "error", "error": barrier}
-
-            claim_error = await self._ensure_valid_claims_with_recovery(
-                [ClaimType.BACKEND_RUNTIME_READY.value, ClaimType.BACKEND_API_READY.value],
-                publish_if_missing=False,
-            )
-            if claim_error:
-                logger.error("[Swarm] Backend claim barrier failed: %s", claim_error)
-                await self._publish_agent_event("system", "error", claim_error)
-                return {"status": "error", "error": claim_error}
-
+            parallel_agents.append(("backend", filtered_task_definitions.get("backend", [root_task])[0]))
         if "frontend" in filtered_task_definitions:
-            if await _check_swarm_stop("frontend"):
-                return {"status": "stopped", "reason": "Stopped by user"}
-            frontend_ok = await self._run_single_agent("frontend", filtered_task_definitions.get("frontend", [root_task])[0])
-            if not frontend_ok:
-                msg = "Specialist agents failed: frontend"
-                logger.error("[Swarm] %s", msg)
-                await self._publish_agent_event(
-                    "system",
-                    "error",
-                    msg,
-                    {"failed_agents": ["frontend"]},
-                )
-                return {"status": "error", "error": msg}
-            selected_agents.append("frontend")
-            self._code_agents_completed.add("frontend")
+            parallel_agents.append(("frontend", filtered_task_definitions.get("frontend", [root_task])[0]))
 
-            barrier = await self._verify_stage_barrier(["frontend"])
-            if barrier:
-                logger.error("[Swarm] Frontend barrier failed: %s", barrier)
-                await self._publish_agent_event("system", "error", barrier)
-                return {"status": "error", "error": barrier}
+        if parallel_agents:
+            for name, _ in parallel_agents:
+                if await _check_swarm_stop(name):
+                    return {"status": "stopped", "reason": f"Stopped by user before {name}"}
 
-            claim_error = await self._ensure_valid_claims_with_recovery(
-                [ClaimType.FRONTEND_SOURCE_READY.value, ClaimType.FRONTEND_BUILD_READY.value],
-                publish_if_missing=False,
+            logger.info("[Swarm] Launching parallel agents: %s", [n for n, _ in parallel_agents])
+            await self._publish_agent_event(
+                "system", "info", f"Launching parallel agents: {[n for n, _ in parallel_agents]}"
             )
-            if claim_error:
-                logger.error("[Swarm] Frontend claim barrier failed: %s", claim_error)
-                await self._publish_agent_event("system", "error", claim_error)
-                return {"status": "error", "error": claim_error}
 
+            async def _run_with_name(name: str, task: str):
+                return name, await self._run_single_agent(name, task)
+
+            results = await asyncio.gather(
+                *[_run_with_name(name, task) for name, task in parallel_agents],
+                return_exceptions=True,
+            )
+
+            for result in results:
+                if isinstance(result, Exception):
+                    msg = f"Parallel agent failed with exception: {result}"
+                    logger.error("[Swarm] %s", msg)
+                    await self._publish_agent_event("system", "error", msg)
+                    return {"status": "error", "error": msg}
+
+                name, ok = result
+                if not ok:
+                    msg = f"Specialist agents failed: {name}"
+                    logger.error("[Swarm] %s", msg)
+                    await self._publish_agent_event(
+                        "system", "error", msg, {"failed_agents": [name]}
+                    )
+                    return {"status": "error", "error": msg}
+
+                selected_agents.append(name)
+                self._code_agents_completed.add(name)
+
+                barrier = await self._verify_stage_barrier([name])
+                if barrier:
+                    logger.error("[Swarm] %s barrier failed: %s", name, barrier)
+                    await self._publish_agent_event("system", "error", barrier)
+                    return {"status": "error", "error": barrier}
+
+                claim_types = {
+                    "backend": [ClaimType.BACKEND_RUNTIME_READY.value, ClaimType.BACKEND_API_READY.value],
+                    "frontend": [ClaimType.FRONTEND_SOURCE_READY.value, ClaimType.FRONTEND_BUILD_READY.value],
+                }
+                claim_error = await self._ensure_valid_claims_with_recovery(
+                    claim_types[name], publish_if_missing=False,
+                )
+                if claim_error:
+                    logger.error("[Swarm] %s claim barrier failed: %s", name, claim_error)
+                    await self._publish_agent_event("system", "error", claim_error)
+                    return {"status": "error", "error": claim_error}
+
+        # Phase 3: DevOps — hard claim barrier (requires backend + frontend claims)
         if "devops" in filtered_task_definitions:
             if await _check_swarm_stop("devops"):
-                return {"status": "stopped", "reason": "Stopped by user"}
-            claim_error = await self._ensure_valid_claims(
-                [ClaimType.BACKEND_RUNTIME_READY.value, ClaimType.FRONTEND_BUILD_READY.value],
-                publish_if_missing=False,
-            )
-            if claim_error:
-                logger.warning("[Swarm] DevOps pre-check claims invalid: %s", claim_error)
-                await self._publish_agent_event("system", "warning", f"DevOps pre-check: {claim_error}")
+                return {"status": "stopped", "reason": "Stopped by user before devops"}
 
-            devops_ok = await self._run_single_agent("devops", filtered_task_definitions.get("devops", [root_task])[0])
+            required_claims = []
+            if "backend" in filtered_task_definitions:
+                required_claims.extend([
+                    ClaimType.BACKEND_RUNTIME_READY.value,
+                    ClaimType.BACKEND_API_READY.value,
+                ])
+            if "frontend" in filtered_task_definitions:
+                required_claims.extend([
+                    ClaimType.FRONTEND_SOURCE_READY.value,
+                    ClaimType.FRONTEND_BUILD_READY.value,
+                ])
+
+            if required_claims:
+                claim_error = await self._ensure_valid_claims_with_recovery(
+                    required_claims, publish_if_missing=False,
+                )
+                if claim_error:
+                    logger.error("[Swarm] DevOps hard claim barrier failed: %s", claim_error)
+                    await self._publish_agent_event(
+                        "system", "error", f"DevOps blocked — missing claims: {claim_error}"
+                    )
+                    return {"status": "error", "error": f"DevOps blocked: {claim_error}"}
+
+            devops_ok = await self._run_single_agent(
+                "devops", filtered_task_definitions.get("devops", [root_task])[0]
+            )
             if not devops_ok:
                 msg = "Specialist agents failed: devops"
                 logger.warning("[Swarm] %s — continuing to packager", msg)
@@ -2102,8 +2148,7 @@ class AgentSwarm:
                 selected_agents.append("devops")
 
             claim_error = await self._ensure_valid_claims_with_recovery(
-                [ClaimType.DEPLOYMENT_READY.value],
-                publish_if_missing=False,
+                [ClaimType.DEPLOYMENT_READY.value], publish_if_missing=False,
             )
             if claim_error:
                 logger.warning("[Swarm] Deployment claim barrier failed: %s — continuing to packager", claim_error)
@@ -2113,17 +2158,55 @@ class AgentSwarm:
             logger.info("[Swarm] Skipping packager — no code changes were made")
             return {"status": "complete"}
 
+        # Phase 4: Packager — verify all claims before packaging
+        all_claims = []
+        if "backend" in filtered_task_definitions:
+            all_claims.extend([
+                ClaimType.BACKEND_RUNTIME_READY.value,
+                ClaimType.BACKEND_API_READY.value,
+            ])
+        if "frontend" in filtered_task_definitions:
+            all_claims.extend([
+                ClaimType.FRONTEND_SOURCE_READY.value,
+                ClaimType.FRONTEND_BUILD_READY.value,
+            ])
+        if "devops" in filtered_task_definitions and "devops" in selected_agents:
+            all_claims.append(ClaimType.DEPLOYMENT_READY.value)
+
+        if all_claims:
+            claim_error = await self._ensure_valid_claims_with_recovery(
+                all_claims, publish_if_missing=False,
+            )
+            if claim_error:
+                logger.error("[Swarm] Packager claim barrier failed: %s", claim_error)
+                await self._publish_agent_event("system", "error", f"Packager blocked: {claim_error}")
+                emergency = await self._run_emergency_packager()
+                if emergency.get("status") == "complete":
+                    return {
+                        "status": "complete",
+                        "warning": f"Packager claim barrier failed: {claim_error}. Emergency packaging succeeded.",
+                    }
+                return {
+                    "status": "error",
+                    "error": f"Packager claim barrier failed: {claim_error}. Emergency packaging also failed.",
+                }
+
         barrier = await self._verify_packager_barrier(selected_agents, filtered_task_definitions)
         if barrier:
             logger.error("[Swarm] Packager barrier failed: %s", barrier)
             await self._publish_agent_event("system", "error", barrier)
-            # Emergency packaging: code agents completed but barrier blocked packager
             emergency = await self._run_emergency_packager()
             if emergency.get("status") == "complete":
-                return {"status": "complete", "warning": f"Packager barrier failed: {barrier}. Emergency packaging succeeded."}
-            return {"status": "error", "error": f"Packager barrier failed: {barrier}. Emergency packaging also failed."}
+                return {
+                    "status": "complete",
+                    "warning": f"Packager barrier failed: {barrier}. Emergency packaging succeeded.",
+                }
+            return {
+                "status": "error",
+                "error": f"Packager barrier failed: {barrier}. Emergency packaging also failed.",
+            }
 
-        # 3. Finalization (Packager)
+        # 5. Finalization (Packager)
         logger.info("[Swarm] Finalizing with packager")
         packager_ok = await self._run_single_agent("packager", task_definitions.get(
             "packager",

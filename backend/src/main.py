@@ -8,7 +8,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -519,6 +519,7 @@ async def start_swarm_background(
     """Background task to run the swarm without blocking."""
     from .swarm.agents import AgentSwarm
     import hashlib
+    import redis.asyncio as _redis
 
     is_modification = run_mode == "modify"
 
@@ -528,6 +529,28 @@ async def start_swarm_background(
     if not getattr(database, "_pool", None):
         await database.connect()
         await database.init_schema()
+
+    # --- Distributed lock: prevent concurrent swarms for the same project ---
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    lock_key = f"project:{project_id}:swarm_lock"
+    lock_acquired = False
+    r: _redis.Redis | None = None
+    try:
+        r = _redis.from_url(redis_url, decode_responses=True)
+        lock_acquired = await r.set(lock_key, "1", nx=True, ex=3600)
+        if not lock_acquired:
+            logger.warning(f"[BG] Swarm already running for project {project_id} — skipping duplicate")
+            await blackboard.publish_agent_event(
+                project_id, "system", "warning",
+                f"Swarm execution skipped: another instance is already running for this project.",
+                {"reason": "duplicate_swarm_prevented"},
+            )
+            return
+    except Exception as lock_err:
+        logger.warning(f"[BG] Lock acquisition failed for {project_id}: {lock_err} — proceeding without lock")
+    finally:
+        if r is not None:
+            await r.aclose()
 
     logger.info(f"[BG] Starting {run_mode} swarm for project: {project_id}")
 
@@ -692,6 +715,15 @@ async def start_swarm_background(
         await blackboard.publish_agent_event(project_id, "system", "error", str(e))
     finally:
         await swarm.shutdown()
+        # --- Release distributed lock ---
+        if lock_acquired:
+            try:
+                r = _redis.from_url(redis_url, decode_responses=True)
+                await r.delete(lock_key)
+                await r.aclose()
+                logger.info(f"[BG] Released swarm lock for project {project_id}")
+            except Exception as unlock_err:
+                logger.warning(f"[BG] Failed to release swarm lock for {project_id}: {unlock_err}")
 
 
 async def start_plan_swarm_background(
@@ -1253,6 +1285,8 @@ async def approve_plan(request: ApproveRequest):
 class AnswerRequest(BaseModel):
     question_id: str
     answers: list[str]
+    questions: list[dict[str, Any]] | None = None
+    ui_mode: str | None = None
 
 
 class DirectiveRequest(BaseModel):
@@ -1434,6 +1468,37 @@ async def submit_answer(project_id: str, request: AnswerRequest):
     try:
         r = _redis.from_url(redis_url, decode_responses=True)
         await r.set(answer_key, _json.dumps(request.answers), ex=3600)
+        try:
+            answered = []
+            for idx, answer in enumerate(request.answers):
+                question = (request.questions or [])[idx] if request.questions and idx < len(request.questions) else {}
+                answered.append({
+                    "question": question.get("label") or question.get("question") or f"Question {idx + 1}",
+                    "answer": answer,
+                    "type": question.get("type") or "text",
+                })
+            await database.save_chat_message(
+                message_id=str(uuid.uuid4()),
+                project_id=project_id,
+                role="user",
+                content="\n".join(f"{item['question']}: {item['answer']}" for item in answered),
+                metadata={
+                    "type": "question_answers",
+                    "question_id": request.question_id,
+                    "ui_mode": request.ui_mode,
+                    "answers": answered,
+                },
+            )
+            current_project = await database.get_project(project_id)
+            current_spec = _coerce_project_spec(current_project)
+            preferences = current_spec.get("user_preferences")
+            if not isinstance(preferences, list):
+                preferences = []
+            preferences.extend(answered)
+            current_spec["user_preferences"] = preferences
+            await database.update_project_spec(project_id, current_spec)
+        except Exception as persist_error:
+            logger.warning("[answer] Failed to persist answer metadata for %s: %s", project_id, persist_error)
     finally:
         if r is not None:
             await r.aclose()

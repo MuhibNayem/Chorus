@@ -1,0 +1,422 @@
+<svelte:head>
+	<title>Sign in — Chorus</title>
+	<style>
+		body { background: var(--paper-1); }
+
+		.auth-shell {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			min-height: 100vh;
+		}
+		@media (max-width: 960px) {
+			.auth-shell { grid-template-columns: 1fr; }
+			.auth-pane-left { display: none; }
+		}
+
+		/* LEFT PANE — atmospheric showcase */
+		.auth-pane-left {
+			position: relative;
+			background: var(--ink-0);
+			color: white;
+			padding: 36px;
+			display: flex; flex-direction: column;
+			overflow: hidden;
+			isolation: isolate;
+		}
+		.auth-pane-left::before {
+			content: ""; position: absolute; inset: 0;
+			background:
+				radial-gradient(60% 50% at 30% 80%, oklch(70% 0.20 295 / 0.32), transparent 60%),
+				radial-gradient(60% 50% at 90% 20%, oklch(75% 0.15 220 / 0.20), transparent 60%);
+			z-index: -1;
+		}
+		.auth-pane-left::after {
+			content: ""; position: absolute; inset: 0;
+			background-image:
+				linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+				linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px);
+			background-size: 48px 48px;
+			mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+			-webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+			z-index: -1;
+		}
+		.brand-row {
+			display: flex; align-items: center; gap: 10px;
+			color: white; font-weight: 600; font-size: 17px;
+			letter-spacing: -0.01em;
+		}
+		.brand-row .hex-mark svg path:first-child { fill: white; }
+		.brand-row .hex-mark svg path:nth-child(2) { fill: var(--ink-0); }
+
+		.pane-content {
+			margin-top: auto;
+			margin-bottom: auto;
+			max-width: 460px;
+		}
+		.pane-content .eyebrow { color: var(--violet-2); }
+		.pane-content h2 {
+			font-family: var(--font-display);
+			font-weight: 400;
+			font-size: 56px; line-height: 1; letter-spacing: -0.02em;
+			margin: 16px 0 24px; color: white;
+		}
+		.pane-content h2 em { font-style: italic; color: oklch(78% 0.16 295); }
+		.pane-content p { color: rgba(255,255,255,0.65); font-size: 15px; line-height: 1.55; max-width: 38ch; }
+
+		/* swarm preview card */
+		.swarm-card {
+			margin-top: 36px;
+			background: rgba(255,255,255,0.04);
+			border: 1px solid rgba(255,255,255,0.10);
+			border-radius: 20px;
+			padding: 18px;
+			backdrop-filter: blur(20px);
+		}
+		.swarm-card .row {
+			display: flex; align-items: center; justify-content: space-between;
+			font-family: var(--font-mono); font-size: 11px;
+			letter-spacing: 0.06em;
+			color: rgba(255,255,255,0.55);
+			margin-bottom: 14px;
+		}
+		.swarm-card .row .live {
+			display: inline-flex; align-items: center; gap: 6px;
+			color: #4ade80;
+		}
+		.swarm-card .row .live::before {
+			content: ""; width: 6px; height: 6px; border-radius: 50%;
+			background: #4ade80; box-shadow: 0 0 10px #4ade80;
+			animation: pulse 1.4s ease-in-out infinite;
+		}
+		.nodes {
+			display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+		}
+		.node {
+			border: 1px solid rgba(255,255,255,0.08);
+			border-radius: 12px;
+			padding: 12px;
+			background: rgba(255,255,255,0.02);
+			display: flex; flex-direction: column; gap: 8px;
+			font-family: var(--font-mono);
+		}
+		.node .nm {
+			font-size: 11px; color: rgba(255,255,255,0.85);
+			letter-spacing: 0.02em;
+		}
+		.node .st { font-size: 10px; color: rgba(255,255,255,0.45); letter-spacing: 0.06em; }
+		.node .bar {
+			height: 3px; background: rgba(255,255,255,0.08);
+			border-radius: 2px; overflow: hidden;
+		}
+		.node .bar > div {
+			height: 100%; background: var(--violet-2); border-radius: 2px;
+			animation: fill 3s ease-in-out infinite alternate;
+		}
+		.node:nth-child(2) .bar > div { animation-delay: 0.4s; background: oklch(80% 0.14 220); }
+		.node:nth-child(3) .bar > div { animation-delay: 0.8s; background: oklch(80% 0.13 160); }
+		.node:nth-child(4) .bar > div { animation-delay: 1.2s; background: oklch(82% 0.12 60); }
+		.node:nth-child(5) .bar > div { animation-delay: 1.6s; background: oklch(80% 0.14 340); }
+		.node:nth-child(6) .bar > div { animation-delay: 2.0s; background: oklch(80% 0.14 30); }
+		@keyframes fill { from { width: 14%; } to { width: 92%; } }
+
+		.pane-footer {
+			margin-top: 24px;
+			display: flex; align-items: center; justify-content: space-between;
+			font-family: var(--font-mono); font-size: 11px;
+			letter-spacing: 0.06em;
+			color: rgba(255,255,255,0.4);
+		}
+
+		/* RIGHT PANE — form */
+		.auth-pane-right {
+			background: var(--paper-1);
+			padding: 36px;
+			display: flex; flex-direction: column;
+			position: relative;
+		}
+		.pane-r-top {
+			display: flex; justify-content: flex-end; gap: 10px;
+			align-items: center; font-size: 13px; color: var(--ink-4);
+		}
+		.pane-r-top a { color: var(--ink-1); font-weight: 500; }
+
+		.form-card {
+			margin: auto;
+			width: 100%; max-width: 420px;
+			padding: 8px 0;
+		}
+		.form-card h1 {
+			font-family: var(--font-display);
+			font-weight: 400;
+			font-size: 44px;
+			letter-spacing: -0.02em;
+			line-height: 1;
+			margin: 0 0 12px;
+		}
+		.form-card .sub { color: var(--ink-4); font-size: 14.5px; line-height: 1.5; margin-bottom: 28px;}
+		.form-card .sub a { color: var(--ink-1); font-weight: 500; border-bottom: 1px solid var(--ink-3); }
+
+		.oauth-row {
+			display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+			margin-bottom: 24px;
+		}
+		.oauth-btn {
+			display: flex; align-items: center; justify-content: center; gap: 8px;
+			border: 1px solid var(--line);
+			background: var(--paper-0);
+			border-radius: 14px;
+			padding: 12px 14px;
+			font-size: 13px; font-weight: 500;
+			color: var(--ink-1);
+			cursor: pointer;
+			transition: all 200ms ease;
+		}
+		.oauth-btn:hover { border-color: var(--ink-3); transform: translateY(-1px); box-shadow: var(--shadow-1); }
+		.oauth-btn svg { width: 17px; height: 17px; }
+
+		.divider {
+			display: flex; align-items: center; gap: 12px;
+			color: var(--ink-5);
+			font-family: var(--font-mono); font-size: 11px;
+			letter-spacing: 0.14em;
+			margin-bottom: 20px;
+		}
+		.divider::before, .divider::after {
+			content: ""; flex: 1; height: 1px; background: var(--line);
+		}
+
+		.field {
+			display: flex; flex-direction: column;
+			gap: 6px;
+			margin-bottom: 14px;
+		}
+		.field-row {
+			display: flex; justify-content: space-between; align-items: baseline;
+		}
+		.field label {
+			font-size: 12.5px; font-weight: 500; color: var(--ink-2);
+			letter-spacing: -0.005em;
+		}
+		.field a.forgot {
+			font-size: 12px; color: var(--ink-4);
+			border-bottom: 1px dashed var(--line-strong);
+		}
+		.field a.forgot:hover { color: var(--violet-d); border-color: var(--violet); }
+
+		.input-wrap {
+			position: relative;
+			display: flex; align-items: center;
+		}
+		.input-wrap > svg.lead {
+			position: absolute; left: 14px;
+			width: 16px; height: 16px;
+			color: var(--ink-5);
+		}
+		.input {
+			width: 100%;
+			background: var(--paper-0);
+			border: 1px solid var(--line);
+			border-radius: 14px;
+			padding: 13px 14px 13px 42px;
+			font-size: 14.5px; font-family: var(--font-sans);
+			color: var(--ink-0);
+			transition: all 180ms ease;
+		}
+		.input::placeholder { color: var(--ink-5); }
+		.input:focus {
+			outline: none;
+			border-color: var(--violet);
+			box-shadow: 0 0 0 4px oklch(70% 0.18 295 / 0.10);
+		}
+		.input.has-trail { padding-right: 44px; }
+		.input-wrap > .trail {
+			position: absolute; right: 8px;
+			background: transparent; border: 0;
+			padding: 6px; color: var(--ink-5);
+			cursor: pointer; border-radius: 8px;
+		}
+		.input-wrap > .trail:hover { color: var(--ink-1); background: var(--paper-1); }
+
+		.check-row {
+			display: flex; align-items: center; gap: 10px;
+			font-size: 13px; color: var(--ink-2);
+			margin: 8px 0 22px;
+			cursor: pointer;
+		}
+		.check-row input { display: none; }
+		.check-row .box {
+			width: 18px; height: 18px;
+			border-radius: 6px;
+			border: 1.5px solid var(--line-strong);
+			background: var(--paper-0);
+			display: inline-flex; align-items: center; justify-content: center;
+			transition: all 160ms ease;
+		}
+		.check-row input:checked + .box {
+			background: var(--ink-0);
+			border-color: var(--ink-0);
+		}
+		.check-row input:checked + .box::after {
+			content: "✓"; color: white; font-size: 12px; font-weight: 700;
+		}
+
+		.submit-btn {
+			width: 100%;
+			padding: 14px 18px;
+			border-radius: 14px;
+			background: var(--ink-0); color: white;
+			border: 0;
+			font-size: 14.5px; font-weight: 500;
+			cursor: pointer; transition: all 220ms ease;
+			box-shadow: 0 8px 22px rgba(124, 58, 237, 0.18), inset 0 1px 0 rgba(255,255,255,0.10);
+			display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+			position: relative; overflow: hidden;
+		}
+		.submit-btn::before {
+			content: ""; position: absolute; inset: 0;
+			background: linear-gradient(180deg, oklch(70% 0.18 295 / 0.20), transparent 60%);
+		}
+		.submit-btn:hover { transform: translateY(-1px); box-shadow: 0 14px 32px rgba(124, 58, 237, 0.30); }
+		.submit-btn span { position: relative; z-index: 1; }
+
+		.form-foot {
+			margin-top: 24px; padding-top: 22px;
+			border-top: 1px dashed var(--line);
+			color: var(--ink-4); font-size: 13px;
+			text-align: center;
+		}
+		.form-foot a { color: var(--ink-0); font-weight: 500; border-bottom: 1px solid var(--ink-3); }
+
+		.pane-r-bot {
+			margin-top: auto;
+			display: flex; justify-content: space-between;
+			font-family: var(--font-mono); font-size: 11px;
+			letter-spacing: 0.06em;
+			color: var(--ink-5);
+			padding-top: 24px;
+		}
+	</style>
+</svelte:head>
+
+<div class="auth-shell" data-screen-label="Login — Auth shell">
+
+	<!-- LEFT — Showcase -->
+	<aside class="auth-pane-left">
+		<div class="brand-row">
+			<span class="hex-mark"><svg viewBox="0 0 32 32" fill="none">
+				<path d="M16 2 L28 9 L28 23 L16 30 L4 23 L4 9 Z" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+				<path d="M16 9 L22 12.5 L22 19.5 L16 23 L10 19.5 L10 12.5 Z"/>
+			</svg></span>
+			Chorus
+		</div>
+
+		<div class="pane-content">
+			<span class="eyebrow on-dark">A ── Welcome back</span>
+			<h2>The mesh is <em>idling</em>, waiting for your prompt.</h2>
+			<p>Six specialist agents — root planner, frontend, backend, data, QA, ops — synchronize through a shared blackboard. You describe what you want. They build it together.</p>
+
+			<div class="swarm-card">
+				<div class="row">
+					<span>SWARM · resume-recent</span>
+					<span class="live">2 active</span>
+				</div>
+				<div class="nodes">
+					<div class="node"><span class="nm">root</span><span class="st">PLANNING</span><span class="bar"><div></div></span></div>
+					<div class="node"><span class="nm">front</span><span class="st">WRITING</span><span class="bar"><div></div></span></div>
+					<div class="node"><span class="nm">back</span><span class="st">IDLE</span><span class="bar"><div></div></span></div>
+					<div class="node"><span class="nm">data</span><span class="st">REVIEW</span><span class="bar"><div></div></span></div>
+					<div class="node"><span class="nm">qa</span><span class="st">QUEUED</span><span class="bar"><div></div></span></div>
+					<div class="node"><span class="nm">ops</span><span class="st">SLEEP</span><span class="bar"><div></div></span></div>
+				</div>
+			</div>
+		</div>
+
+		<div class="pane-footer">
+			<span>SOC 2 · TYPE II</span>
+			<span>v2.0.4 · NOMINAL</span>
+		</div>
+	</aside>
+
+	<!-- RIGHT — Form -->
+	<main class="auth-pane-right">
+		<div class="pane-r-top">
+			<span>New to Chorus?</span>
+			<a href="/register" class="btn btn-ghost btn-sm">Create account</a>
+		</div>
+
+		<div class="form-card">
+			<span class="eyebrow">B ── Sign in</span>
+			<h1 style="margin-top: 12px;">Welcome back.</h1>
+			<p class="sub">Pick up where the swarm left off, or kick off a new build.</p>
+
+			<div class="oauth-row">
+				<button class="oauth-btn" type="button">
+					<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.5 12.27c0-.79-.07-1.54-.2-2.27H12v4.51h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.32z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.1c-.22-.66-.35-1.37-.35-2.1s.13-1.44.35-2.1V7.06H2.18A11 11 0 0 0 1 12c0 1.78.43 3.46 1.18 4.94l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
+					Google
+				</button>
+				<button class="oauth-btn" type="button">
+					<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.79 23.4c.6.1.82-.26.82-.58v-2.16c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.08-.73.08-.73 1.2.08 1.83 1.23 1.83 1.23 1.06 1.82 2.79 1.3 3.47.99.1-.77.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.23-3.22-.13-.3-.54-1.52.11-3.16 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.65 1.64.24 2.86.12 3.16.77.84 1.23 1.91 1.23 3.22 0 4.62-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.58A12 12 0 0 0 12 .3"/></svg>
+					GitHub
+				</button>
+				<button class="oauth-btn" type="button">
+					<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11.65 2.85c-.34 1.05.43 2.07 1.55 2.05 1.06-.02 1.83-.93 1.84-1.95.01-1.04-.84-1.95-1.91-1.95-.78 0-1.32.41-1.48.85-.49 1.34.31 2.55 1.42 2.55Z"/><path d="M19.18 15.86c-.04-.07-1.71-.95-1.69-2.97.02-2.41 1.97-3.21 2.05-3.26-1.12-1.64-2.86-1.86-3.48-1.89-1.48-.15-2.89.87-3.64.87-.76 0-1.91-.85-3.15-.83-1.61.02-3.11.94-3.94 2.39-1.69 2.93-.43 7.27 1.21 9.65.8 1.16 1.76 2.46 3.01 2.42 1.21-.05 1.66-.78 3.13-.78 1.46 0 1.88.78 3.16.75 1.31-.02 2.13-1.18 2.93-2.34.92-1.34 1.3-2.65 1.32-2.71-.03-.01-2.51-.97-2.55-3.81-.04-2.36 1.92-3.49 1.96-3.51-1.07-1.57-2.74-1.74-3.32-1.78Z"/></svg>
+					Apple
+				</button>
+			</div>
+
+			<div class="divider">OR · WITH EMAIL</div>
+
+			<form>
+				<div class="field">
+					<label for="email">Work email</label>
+					<div class="input-wrap">
+						<svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+						<input class="input" type="email" id="email" placeholder="you@company.com" autocomplete="email" />
+					</div>
+				</div>
+
+				<div class="field">
+					<div class="field-row">
+						<label for="pw">Password</label>
+						<a class="forgot" href="#">Forgot?</a>
+					</div>
+					<div class="input-wrap">
+						<svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+						<input class="input has-trail" type="password" id="pw" placeholder="••••••••••" autocomplete="current-password" />
+						<button type="button" class="trail" aria-label="Show password" onclick={togglePw}>
+							<svg id="eye" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+						</button>
+					</div>
+				</div>
+
+				<label class="check-row">
+					<input type="checkbox" checked />
+					<span class="box"></span>
+					<span>Keep me signed in for 30 days</span>
+				</label>
+
+				<button class="submit-btn" type="submit">
+					<span>Sign in</span>
+					<span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
+				</button>
+			</form>
+
+			<p class="form-foot">
+				Need SSO for your team? <a href="#">Sign in with SAML</a>
+			</p>
+		</div>
+
+		<div class="pane-r-bot">
+			<span>© 2026 CHORUS LABS</span>
+			<span><a href="#" style="color: var(--ink-4);">Privacy</a> · <a href="#" style="color: var(--ink-4);">Terms</a></span>
+		</div>
+	</main>
+
+</div>
+
+<script lang="ts">
+	function togglePw() {
+		const i = document.getElementById('pw') as HTMLInputElement;
+		i.type = i.type === 'password' ? 'text' : 'password';
+	}
+</script>

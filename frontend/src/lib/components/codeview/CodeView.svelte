@@ -1,10 +1,9 @@
 <script lang="ts">
 	import FileTree from './FileTree.svelte';
 	import MonacoEditor from './MonacoEditor.svelte';
+	import AgentStatusPanel from './AgentStatusPanel.svelte';
 	import type { EditorTab } from './MonacoEditor.svelte';
-	import Code2 from '@lucide/svelte/icons/code-2';
 	import PanelRightClose from '@lucide/svelte/icons/panel-right-close';
-	import PanelRight from '@lucide/svelte/icons/panel-right';
 
 	interface FileNode {
 		name: string;
@@ -13,15 +12,35 @@
 		children?: FileNode[];
 	}
 
+	interface AgentLike {
+		id: string;
+		name: string;
+		status: 'idle' | 'working' | 'thinking' | 'complete' | 'error' | 'paused' | 'stopped';
+		currentAction: string;
+		progress: { percent: number; completed: number; total: number };
+	}
+
 	interface Props {
 		files: FileNode[];
 		projectId?: string;
 		collapsed?: boolean;
 		onToggleCollapse?: () => void;
+		onSelectAgent?: (id: string) => void;
+		selectedAgentId?: string | null;
+		agents?: AgentLike[];
 		lastWrittenFile?: { path: string; ts: number; content?: string; phase?: string };
 	}
 
-	let { files = [], projectId, collapsed = false, onToggleCollapse, lastWrittenFile }: Props = $props();
+	let {
+		files = [],
+		projectId,
+		collapsed = false,
+		onToggleCollapse,
+		onSelectAgent,
+		selectedAgentId,
+		agents = [],
+		lastWrittenFile
+	}: Props = $props();
 
 	let openTabs = $state<EditorTab[]>([]);
 	let activeTabPath = $state<string | undefined>(undefined);
@@ -32,6 +51,10 @@
 			const response = await fetch(`/api/workspace/${projectId}/read?path=${encodeURIComponent(path)}`);
 			if (response.ok) {
 				const data = await response.json();
+				const content = typeof data.content === 'string' ? data.content : '';
+				if (typeof data.content !== 'string') {
+					console.error('Workspace read response did not include string content:', data);
+				}
 				const fileName = path.split('/').pop() || path;
 
 				const existingTab = openTabs.find(t => t.path === path);
@@ -39,18 +62,21 @@
 					// Always re-fetch — agent may have updated the file since it was first opened
 					openTabs = openTabs.map(t =>
 						t.path === path
-							? { ...t, content: data.content, language: data.language || t.language }
+							? { ...t, content, language: data.language || t.language }
 							: t
 					);
 				} else {
 					openTabs = [...openTabs, {
 						path,
 						name: fileName,
-						content: data.content,
+						content,
 						language: data.language || 'plaintext'
 					}];
 				}
 				activeTabPath = path;
+			} else {
+				const data = await response.json().catch(() => ({}));
+				console.error('Failed to load file:', response.status, data);
 			}
 		} catch (error) {
 			console.error('Failed to load file:', error);
@@ -92,65 +118,54 @@
 			activeTabPath = newTabs.length > 0 ? newTabs[newTabs.length - 1].path : undefined;
 		}
 	}
-
 </script>
 
 {#if !collapsed}
-	<div class="flex h-full min-h-0 overflow-hidden rounded-[2rem] border border-white/50 bg-white/65 shadow-[0_20px_60px_rgba(15,23,42,0.12)] backdrop-blur-xl">
-		<!-- Explorer -->
-		<div class="flex w-72 xl:w-80 min-h-0 flex-col border-r border-white/40 bg-white/40">
-			<div class="flex items-start justify-between gap-3 border-b border-white/40 px-4 py-4">
-				<div class="space-y-1">
-					<div class="flex items-center gap-2">
-						<Code2 class="h-4 w-4 text-primary" />
-						<span class="text-sm font-semibold text-foreground">Explorer</span>
-					</div>
-					<p class="text-[11px] leading-4 text-muted-foreground/65">
-						VS Code style file browser with unlimited nesting.
-					</p>
-				</div>
-				<button
-					onclick={onToggleCollapse}
-					class="rounded-xl border border-white/40 bg-white/50 p-2 shadow-sm transition-colors hover:bg-white hover:text-foreground"
-					title="Collapse panel"
-				>
-					<PanelRightClose class="h-4 w-4 text-muted-foreground/60" />
-				</button>
+	<div class="ide">
+		<!-- Window chrome -->
+		<div class="ide-bar">
+			<div class="dots">
+				<span class="dot r"></span>
+				<span class="dot y"></span>
+				<span class="dot g"></span>
 			</div>
-
-			<div class="min-h-0 flex-1 overflow-visible">
-				<FileTree
-					{files}
-					onFileSelect={handleFileSelect}
-					selectedPath={activeTabPath}
-				/>
-			</div>
+			<span class="path">{projectId ? `project/${projectId.slice(0, 8)}` : 'project'}</span>
+			<button onclick={onToggleCollapse} class="close-btn" title="Close">
+				<PanelRightClose class="h-3.5 w-3.5" />
+			</button>
 		</div>
 
-		<!-- Editor -->
-		<div class="min-h-0 flex-1 bg-editor/95">
-			{#if openTabs.length > 0}
-				<MonacoEditor
-					tabs={openTabs}
-					activeTab={activeTabPath}
-					{projectId}
-					onTabSelect={(path) => activeTabPath = path}
-					onTabClose={handleTabClose}
-					readOnly={true}
-				/>
-			{:else}
-				<div class="flex h-full items-center justify-center px-8">
-					<div class="max-w-sm rounded-2xl border border-white/10 bg-white/5 px-6 py-8 text-center text-muted-foreground/60 shadow-lg shadow-black/10">
-						<div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10">
-							<Code2 class="h-7 w-7 text-primary" />
+		<div class="ide-body">
+			<!-- Tree -->
+			<div class="ide-tree">
+				<FileTree {files} onFileSelect={handleFileSelect} selectedPath={activeTabPath} />
+			</div>
+
+			<!-- Editor -->
+			<div class="ide-editor">
+				{#if openTabs.length > 0}
+					<MonacoEditor
+						tabs={openTabs}
+						activeTab={activeTabPath}
+						{projectId}
+						onTabSelect={(path) => activeTabPath = path}
+						onTabClose={handleTabClose}
+						readOnly={true}
+					/>
+				{:else}
+					<div class="empty-editor">
+						<div class="empty-card">
+							<p class="empty-title">Select a file</p>
+							<p class="empty-sub">Open any file from the explorer to view and edit code.</p>
 						</div>
-						<p class="text-sm font-medium text-foreground/85">Select a file from the explorer</p>
-						<p class="mt-2 text-xs leading-5">
-							The editor opens beside the tree, matching the VS Code layout and keeping deeper folders accessible.
-						</p>
 					</div>
-				</div>
-			{/if}
+				{/if}
+			</div>
+
+			<!-- Agent status -->
+			<div class="ide-side">
+				<AgentStatusPanel {agents} onSelectAgent={onSelectAgent} {selectedAgentId} />
+			</div>
 		</div>
 	</div>
 {/if}
@@ -158,9 +173,174 @@
 {#if collapsed}
 	<button
 		onclick={onToggleCollapse}
-		class="fixed right-4 top-20 rounded-xl border border-white/40 bg-white/80 p-2 shadow-lg shadow-black/10 backdrop-blur-xl transition-colors hover:bg-white z-50"
+		class="code-peek-btn"
 		title="Show code panel"
 	>
-		<PanelRight class="h-5 w-5 text-primary" />
+		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
 	</button>
 {/if}
+
+<style>
+	.ide {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		min-height: 0;
+		overflow: hidden;
+		background: var(--ink-0);
+		color: rgba(255,255,255,0.85);
+		border: 1px solid rgba(255,255,255,0.08);
+		box-shadow: 0 30px 80px rgba(20,18,32,0.18);
+	}
+
+	.ide-bar {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 10px 14px;
+		border-bottom: 1px solid rgba(255,255,255,0.06);
+		background: rgba(255,255,255,0.03);
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: rgba(255,255,255,0.45);
+		flex-shrink: 0;
+	}
+
+	.dots {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.dot {
+		width: 10px;
+		height: 10px;
+		border-radius: 50%;
+		background: rgba(255,255,255,0.14);
+	}
+	.dot.r { background: oklch(70% 0.18 18); }
+	.dot.y { background: oklch(80% 0.14 75); }
+	.dot.g { background: oklch(75% 0.14 150); }
+
+	.path {
+		flex: 1;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.close-btn {
+		background: none;
+		border: none;
+		padding: 4px;
+		color: rgba(255,255,255,0.35);
+		cursor: pointer;
+		border-radius: 6px;
+		line-height: 0;
+		transition: color 120ms ease, background 120ms ease;
+	}
+	.close-btn:hover {
+		color: rgba(255,255,255,0.70);
+		background: rgba(255,255,255,0.06);
+	}
+
+	/* Body uses flex row (like original working layout) instead of grid */
+	.ide-body {
+		display: flex;
+		flex-direction: row;
+		flex: 1;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.ide-tree {
+		width: 200px;
+		flex-shrink: 0;
+		border-right: 1px solid rgba(255,255,255,0.06);
+		background: rgba(255,255,255,0.02);
+		min-width: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.ide-editor {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		background: var(--ink-0);
+		display: flex;
+		flex-direction: column;
+	}
+
+	.ide-side {
+		width: 220px;
+		flex-shrink: 0;
+		min-width: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.empty-editor {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 100%;
+		padding: 0 24px;
+	}
+	.empty-card {
+		max-width: 280px;
+		border-radius: 8px;
+		border: 1px solid rgba(255,255,255,0.06);
+		background: rgba(255,255,255,0.03);
+		padding: 28px 24px;
+		text-align: center;
+	}
+	.empty-title {
+		font-size: 13px;
+		font-weight: 500;
+		color: rgba(255,255,255,0.70);
+		margin: 0 0 6px;
+	}
+	.empty-sub {
+		font-size: 11.5px;
+		color: rgba(255,255,255,0.40);
+		line-height: 1.5;
+		margin: 0;
+	}
+
+	.code-peek-btn {
+		position: fixed;
+		right: 14px;
+		top: 80px;
+		z-index: 50;
+		width: 36px;
+		height: 36px;
+		border-radius: 8px;
+		border: 1px solid rgba(255,255,255,0.10);
+		background: var(--ink-0);
+		color: rgba(255,255,255,0.55);
+		cursor: pointer;
+		display: grid;
+		place-items: center;
+		box-shadow: 0 8px 24px rgba(20,18,32,0.25);
+		transition: color 120ms ease, border-color 120ms ease, transform 120ms ease;
+	}
+	.code-peek-btn:hover {
+		color: rgba(255,255,255,0.90);
+		border-color: rgba(255,255,255,0.20);
+		transform: translateY(-1px);
+	}
+
+	@media (max-width: 1280px) {
+		.ide-tree { width: 180px; }
+		.ide-side { width: 180px; }
+	}
+
+	@media (max-width: 1080px) {
+		.ide-tree,
+		.ide-side {
+			display: none;
+		}
+	}
+</style>

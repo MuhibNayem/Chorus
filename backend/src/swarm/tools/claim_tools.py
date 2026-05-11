@@ -810,6 +810,7 @@ async def _cascade_staleness(
     """Mark all valid claims that depend on *source_claim_type* as stale.
 
     Returns the list of claims that were affected.
+    Handles claim types that may have multiple claims (e.g. BACKEND_API_ENDPOINT).
     """
     if visited is None:
         visited = set()
@@ -819,8 +820,16 @@ async def _cascade_staleness(
 
     affected: list[dict[str, Any]] = []
     for dependent_type in get_claim_dependents(source_claim_type):
-        dependent_claim = await store.get_latest_claim(project_id, dependent_type)
-        if dependent_claim and dependent_claim.get("status") == ClaimStatus.VALID.value:
+        # Some claim types may have multiple claims (e.g. per-endpoint claims).
+        # Use get_valid_claims_by_type to find all valid claims of this type.
+        dependent_claims = await store.get_valid_claims_by_type(project_id, dependent_type)
+        if not dependent_claims:
+            # Fallback to latest claim for backward compatibility
+            dependent_claim = await store.get_latest_claim(project_id, dependent_type)
+            if dependent_claim and dependent_claim.get("status") == ClaimStatus.VALID.value:
+                dependent_claims = [dependent_claim]
+
+        for dependent_claim in dependent_claims:
             updated = await store.update_claim_status(
                 project_id,
                 dependent_claim["id"],
@@ -1324,6 +1333,48 @@ async def wait_for_claim(
     )
 
 
+@tool("list_api_endpoints")
+async def list_api_endpoints() -> dict[str, Any]:
+    """List all published and valid BACKEND_API_ENDPOINT claims.
+
+    Returns a structured list of API endpoints that the backend has already
+    implemented and validated. The frontend agent can use this to generate
+    API client code incrementally — one endpoint at a time — rather than
+    waiting for the entire backend to finish.
+
+    Each endpoint includes method, path, evidence file, and any metadata
+    the backend published (request/response schemas, auth requirements, etc.).
+    """
+    context = get_claim_context()
+    project_id = context["project_id"]
+    claim_store = ClaimStore()
+    try:
+        claims = await claim_store.get_valid_claims_by_type(
+            project_id, ClaimType.BACKEND_API_ENDPOINT.value
+        )
+        endpoints = []
+        for claim in claims:
+            evidence = claim.get("evidence") or {}
+            meta = evidence.get("metadata") or {}
+            endpoints.append({
+                "method": meta.get("method", ""),
+                "path": meta.get("path", ""),
+                "files": evidence.get("files", []),
+                "schema": meta.get("schema", {}),
+                "auth_required": meta.get("auth_required", False),
+                "published_at": claim.get("created_at", ""),
+            })
+        return {
+            "status": "success",
+            "count": len(endpoints),
+            "endpoints": endpoints,
+        }
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+    finally:
+        await claim_store.close()
+
+
 async def verify_claim_adversarially_record(
     project_id: str,
     claim_id: str,
@@ -1353,6 +1404,7 @@ async def verify_claim_adversarially_record(
 __all__ = [
     "publish_claim",
     "wait_for_claim",
+    "list_api_endpoints",
     "verify_and_publish_claim",
     "verify_progress",
     "publish_claim_record",

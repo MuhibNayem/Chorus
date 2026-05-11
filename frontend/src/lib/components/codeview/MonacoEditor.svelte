@@ -47,23 +47,11 @@
 	function getLanguage(filename: string): string {
 		const ext = filename.split('.').pop()?.toLowerCase() || '';
 		const langMap: Record<string, string> = {
-			'java': 'java',
-			'svelte': 'html',
-			'ts': 'typescript',
-			'js': 'javascript',
-			'json': 'json',
-			'yml': 'yaml',
-			'yaml': 'yaml',
-			'xml': 'xml',
-			'properties': 'properties',
-			'gradle': 'groovy',
-			'md': 'markdown',
-			'css': 'css',
-			'html': 'html',
-			'txt': 'plaintext',
-			'py': 'python',
-			'sh': 'shell',
-			'bash': 'shell'
+			'java': 'java', 'svelte': 'html', 'ts': 'typescript', 'js': 'javascript',
+			'json': 'json', 'yml': 'yaml', 'yaml': 'yaml', 'xml': 'xml',
+			'properties': 'properties', 'gradle': 'groovy', 'md': 'markdown',
+			'css': 'css', 'html': 'html', 'txt': 'plaintext', 'py': 'python',
+			'sh': 'shell', 'bash': 'shell'
 		};
 		return langMap[ext] || 'plaintext';
 	}
@@ -97,9 +85,11 @@
 				'editor.foreground': '#c9d1d9',
 				'editor.lineHighlightBackground': '#161b22',
 				'editor.selectionBackground': '#264f78',
-				'editorCursor.foreground': '#58A6FF',
+				'editorCursor.foreground': '#58a6ff',
 				'editorLineNumber.foreground': '#484f58',
-				'editorLineNumber.activeForeground': '#c9d1d9'
+				'editorLineNumber.activeForeground': '#c9d1d9',
+				'editorWidget.background': '#161b22',
+				'editorWidget.border': '#30363d',
 			}
 		});
 
@@ -109,7 +99,7 @@
 			theme: 'chorus-dark',
 			readOnly: readOnly,
 			minimap: { enabled: false },
-			fontSize: 13,
+			fontSize: 12.5,
 			fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace",
 			lineNumbers: 'on',
 			scrollBeyondLastLine: false,
@@ -119,8 +109,9 @@
 			tabSize: 4,
 			wordWrap: 'on',
 			scrollbar: {
-				verticalScrollbarSize: 8,
-				horizontalScrollbarSize: 8
+				verticalScrollbarSize: 6,
+				horizontalScrollbarSize: 6,
+				useShadows: false
 			}
 		});
 
@@ -223,14 +214,14 @@
 	});
 </script>
 
-<div class="flex flex-col h-full bg-editor">
+<div class="editor-wrap">
 	<!-- Tabs -->
 	{#if tabs.length > 0}
-		<div class="flex items-center bg-sidebar border-b border-white/10 overflow-x-auto">
+		<div class="tab-bar">
 			{#each tabs as tab (tab.path)}
 				<button
 					type="button"
-					class="group flex items-center gap-2 px-3 py-2 text-xs border-r border-white/5 cursor-pointer transition-colors {activeTab === tab.path ? 'bg-editor text-foreground' : 'bg-sidebar text-muted-foreground/70 hover:bg-white/5 hover:text-foreground/80'}"
+					class="tab {activeTab === tab.path ? 'active' : ''}"
 					onclick={() => {
 						onTabSelect?.(tab.path);
 						loadTab(tab);
@@ -238,12 +229,12 @@
 					role="tab"
 					aria-selected={activeTab === tab.path}
 				>
-					<span class="truncate max-w-[150px]">{tab.name}</span>
+					<span class="tab-name">{tab.name}</span>
 					{#if onTabClose}
 						<span
 							onclick={(e) => { e.stopPropagation(); onTabClose?.(tab.path); }}
 							onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onTabClose?.(tab.path); }}}
-							class="opacity-0 group-hover:opacity-100 hover:bg-white/10 rounded p-0.5 transition-opacity cursor-pointer"
+							class="tab-close"
 							role="button"
 							tabindex="0"
 						>
@@ -256,51 +247,145 @@
 	{/if}
 
 	<!-- Toolbar -->
-	<div class="flex items-center gap-2 px-3 py-1.5 border-b border-white/5 bg-sidebar/50">
-		<button
-			onclick={copyContent}
-			class="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground/70 hover:text-foreground hover:bg-white/5 rounded transition-colors"
-			title="Copy content"
-		>
+	<div class="toolbar">
+		<button onclick={copyContent} class="tool-btn" title="Copy content">
 			{#if copied}
-				<Check class="h-3.5 w-3.5 text-green-500" />
+				<Check class="h-3.5 w-3.5" style="color: oklch(75% 0.14 150);" />
 				<span>Copied!</span>
 			{:else}
 				<Copy class="h-3.5 w-3.5" />
 				<span>Copy</span>
 			{/if}
 		</button>
-		<button
-			onclick={downloadFile}
-			class="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground/70 hover:text-foreground hover:bg-white/5 rounded transition-colors"
-			title="Download file"
-		>
+		<button onclick={downloadFile} class="tool-btn" title="Download file">
 			<Download class="h-3.5 w-3.5" />
 			<span>Download</span>
 		</button>
-		<button
-			onclick={downloadProjectZip}
-			disabled={!projectId}
-			class="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground/70 hover:text-foreground hover:bg-white/5 rounded transition-colors disabled:opacity-50"
-			title="Download project ZIP"
-		>
+		<button onclick={downloadProjectZip} disabled={!projectId} class="tool-btn" title="Project ZIP">
 			<FolderArchive class="h-3.5 w-3.5" />
-			<span>Project ZIP</span>
+			<span>ZIP</span>
 		</button>
 		<div class="flex-1"></div>
 		{#if activeTab}
-			<span class="text-xs text-muted-foreground/40">
-				{tabs.find(t => t.path === activeTab)?.path || ''}
-			</span>
+			<span class="file-path">{tabs.find(t => t.path === activeTab)?.path || ''}</span>
 		{/if}
 	</div>
 
 	<!-- Editor -->
-	<div bind:this={editorContainer} class="flex-1"></div>
+	<div bind:this={editorContainer} class="editor-area"></div>
 </div>
 
 <style>
-	:global(.chorus-dark .monaco-editor) {
-		padding-top: 0;
+	.editor-wrap {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		background: var(--ink-0);
+	}
+
+	.tab-bar {
+		display: flex;
+		align-items: center;
+		background: var(--ink-0);
+		border-bottom: 1px solid rgba(255,255,255,0.06);
+		overflow-x: auto;
+		flex-shrink: 0;
+	}
+	.tab-bar::-webkit-scrollbar { height: 0; }
+
+	.tab {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 8px 12px;
+		font-size: 11.5px;
+		font-family: var(--font-mono);
+		border: none;
+		border-right: 1px solid rgba(255,255,255,0.05);
+		background: transparent;
+		color: rgba(255,255,255,0.40);
+		cursor: pointer;
+		white-space: nowrap;
+		transition: color 120ms ease, background 120ms ease;
+	}
+	.tab:hover {
+		color: rgba(255,255,255,0.70);
+		background: rgba(255,255,255,0.03);
+	}
+	.tab.active {
+		color: rgba(255,255,255,0.90);
+		background: rgba(255,255,255,0.04);
+	}
+
+	.tab-name {
+		max-width: 140px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.tab-close {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		padding: 2px;
+		border-radius: 4px;
+		opacity: 0;
+		transition: opacity 120ms ease, background 120ms ease;
+		line-height: 0;
+	}
+	.tab:hover .tab-close {
+		opacity: 1;
+	}
+	.tab-close:hover {
+		background: rgba(255,255,255,0.10);
+	}
+
+	.toolbar {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		padding: 4px 10px;
+		border-bottom: 1px solid rgba(255,255,255,0.04);
+		background: var(--ink-0);
+		flex-shrink: 0;
+	}
+
+	.tool-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 4px 8px;
+		font-size: 11px;
+		font-family: var(--font-mono);
+		color: rgba(255,255,255,0.40);
+		background: none;
+		border: none;
+		border-radius: 6px;
+		cursor: pointer;
+		transition: color 120ms ease, background 120ms ease;
+		line-height: 1;
+	}
+	.tool-btn:hover {
+		color: rgba(255,255,255,0.75);
+		background: rgba(255,255,255,0.05);
+	}
+	.tool-btn:disabled {
+		opacity: 0.35;
+		cursor: not-allowed;
+	}
+
+	.file-path {
+		font-size: 10.5px;
+		font-family: var(--font-mono);
+		color: rgba(255,255,255,0.25);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 50%;
+	}
+
+	.editor-area {
+		flex: 1;
+		min-height: 0;
 	}
 </style>

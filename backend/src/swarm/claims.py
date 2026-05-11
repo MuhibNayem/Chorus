@@ -16,6 +16,7 @@ from uuid import uuid4
 class ClaimType(StrEnum):
     SPEC_READY = "SPEC_READY"
     BACKEND_RUNTIME_READY = "BACKEND_RUNTIME_READY"
+    BACKEND_API_ENDPOINT = "BACKEND_API_ENDPOINT"
     BACKEND_API_READY = "BACKEND_API_READY"
     FRONTEND_SOURCE_READY = "FRONTEND_SOURCE_READY"
     FRONTEND_BUILD_READY = "FRONTEND_BUILD_READY"
@@ -60,6 +61,7 @@ REQUIRED_CLAIM_STATUSES = tuple(status.value for status in ClaimStatus)
 CLAIM_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     ClaimType.SPEC_READY.value: (),
     ClaimType.BACKEND_RUNTIME_READY.value: (ClaimType.SPEC_READY.value,),
+    ClaimType.BACKEND_API_ENDPOINT.value: (ClaimType.BACKEND_RUNTIME_READY.value,),
     ClaimType.BACKEND_API_READY.value: (ClaimType.BACKEND_RUNTIME_READY.value,),
     ClaimType.FRONTEND_SOURCE_READY.value: (ClaimType.SPEC_READY.value,),
     ClaimType.FRONTEND_BUILD_READY.value: (ClaimType.BACKEND_API_READY.value,),
@@ -74,6 +76,7 @@ CLAIM_DEPENDENCIES: dict[str, tuple[str, ...]] = {
 CLAIM_PRODUCERS: dict[str, str] = {
     ClaimType.SPEC_READY.value: "rootdep",
     ClaimType.BACKEND_RUNTIME_READY.value: "backend",
+    ClaimType.BACKEND_API_ENDPOINT.value: "backend",
     ClaimType.BACKEND_API_READY.value: "backend",
     ClaimType.FRONTEND_SOURCE_READY.value: "frontend",
     ClaimType.FRONTEND_BUILD_READY.value: "frontend",

@@ -1,1555 +1,788 @@
-<script lang="ts">
-	import { onMount, onDestroy } from "svelte";
-	import { Button } from "$lib/components/ui/button";
-	import { Input } from "$lib/components/ui/input";
-	import { ScrollArea } from "$lib/components/ui/scroll-area";
-	import { ChatMessage } from "$lib/components/chat";
-	import {
-		MeshGrid,
-		AgentDetail,
-		GlobalProgress,
-		VersionHistory,
-	} from "$lib/components/mesh";
-	import { DownloadButtons } from "$lib/components/chat";
-	import PlanSpecPreview from "$lib/components/plan/PlanSpecPreview.svelte";
-	import PlanActivityPanel from "$lib/components/plan/PlanActivityPanel.svelte";
-	import { agentRegistry } from "$lib/agent-registry.svelte";
-	import { AGUIClient } from "$lib/aguiclient";
-	import ProjectSidebar from "$lib/components/ProjectSidebar.svelte";
-	import CodeView from "$lib/components/codeview/CodeView.svelte";
-	import Send from '@lucide/svelte/icons/send';
-	import Loader2 from '@lucide/svelte/icons/loader-2';
-	import Hexagon from '@lucide/svelte/icons/hexagon';
-	import RefreshCcw from '@lucide/svelte/icons/refresh-ccw';
-	import History from '@lucide/svelte/icons/history';
-	import PanelLeftOpen from '@lucide/svelte/icons/panel-left-open';
-	import Map from '@lucide/svelte/icons/map';
-	import Play from '@lucide/svelte/icons/play';
-	import Eye from '@lucide/svelte/icons/eye';
-	import Code2 from '@lucide/svelte/icons/code-2';
-	import Settings from '@lucide/svelte/icons/settings';
-	import Square from '@lucide/svelte/icons/square';
-	import { settings } from "$lib/settings.svelte";
+<svelte:head>
+	<title>Chorus — Build production apps with an AI agent swarm</title>
+	<style>
+		/* ── Landing-specific ─────────────────────────────── */
+		.hero {
+			position: relative;
+			min-height: 100vh;
+			overflow: hidden;
+			color: white;
+			padding: 120px 32px 80px;
+			isolation: isolate;
+		}
+		.hero .grain { z-index: 1; }
+		.hero .hex-bg {
+			position: absolute; inset: -10%;
+			background-image:
+				linear-gradient(transparent 1px, transparent 31px),
+				linear-gradient(60deg, transparent 0 31px, rgba(255,255,255,0.05) 31px 32px),
+				linear-gradient(-60deg, transparent 0 31px, rgba(255,255,255,0.05) 31px 32px);
+			background-size: 32px 56px;
+			mask-image: radial-gradient(60% 60% at 50% 40%, black, transparent 75%);
+			z-index: 1; pointer-events: none;
+		}
+		.hero-inner {
+			position: relative; z-index: 3;
+			max-width: 1240px; margin: 0 auto;
+			display: grid;
+			grid-template-columns: 1.05fr 0.95fr;
+			gap: 80px; align-items: center;
+		}
+		@media (max-width: 980px) {
+			.hero-inner { grid-template-columns: 1fr; }
+			.hero-visual { display: none; }
+		}
+		.hero h1 {
+			font-family: var(--font-display);
+			font-weight: 400;
+			font-size: clamp(56px, 8.4vw, 124px);
+			line-height: 0.92;
+			letter-spacing: -0.028em;
+			margin: 24px 0 28px;
+			color: white;
+		}
+		.hero h1 em {
+			font-style: italic;
+			background: linear-gradient(180deg, oklch(85% 0.14 295), oklch(72% 0.18 220));
+			-webkit-background-clip: text; background-clip: text; color: transparent;
+		}
+		.hero .lede { font-size: clamp(17px, 1.4vw, 19.5px); color: rgba(255,255,255,0.72); max-width: 56ch; }
+		.hero-cta { display: flex; gap: 12px; margin-top: 36px; flex-wrap: wrap; }
+		.hero-meta {
+			margin-top: 56px; display: flex; gap: 28px; flex-wrap: wrap;
+			font-family: var(--font-mono); font-size: 11.5px;
+			letter-spacing: 0.06em; color: rgba(255,255,255,0.55);
+			align-items: center;
+		}
+		.hero-meta .seg { display: inline-flex; align-items: center; gap: 8px; }
+		.hero-meta .seg::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--violet-2); box-shadow: 0 0 10px var(--violet); }
 
-	let inputValue = $state("");
-	let aguiClient: AGUIClient | null = null;
-	let activeProjectId = $state<string | null>(null);
-	let pendingQuestion = $state<{ question_id: string; questions: string[] } | null>(null);
-	let questionAnswers = $state<string[]>([]);
-	let isSubmittingAnswers = $state(false);
-	let isSidebarCollapsed = $state(false);
-	let isMobile = $state(false);
-	let showVersionHistory = $state(false);
-	let isPlanMode = $state(false);
-	let planResponse = $state<string | null>(null);
-	let isExecutingPlan = $state(false);
-	let isCodeViewCollapsed = $state(true);
-	let workspaceFiles = $state<any[]>([]);
-	let lastWrittenFile = $state<{ path: string; ts: number; content?: string; phase?: string } | undefined>(undefined);
-	let _fileRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-	let _workspaceLoadSeq = 0;
-	let specContent = $state<string | null>(null);
-	let isEditingSpec = $state(false);
-	let editedSpecContent = $state("");
-
-	let chatHistory = $state<
-		{ role: "user" | "assistant"; content: string; metadata?: any }[]
-	>([]);
-
-	type ProjectStatusSnapshot = {
-		project_id: string;
-		status: string;
-		error?: string | null;
-		run_mode?: string | null;
-		context_mode?: string | null;
-		checkpoint_id?: string | null;
-		spec?: Record<string, any>;
-		spec_content?: string | null;
-		source?: string;
-	};
-
-	const selectedAgent = $derived(agentRegistry.selectedAgent);
-	const allAgents = $derived(agentRegistry.allAgents);
-	const isRunning = $derived(agentRegistry.isRunning);
-	const globalProgress = $derived(agentRegistry.globalProgress);
-	const downloadReady = $derived(agentRegistry.downloadReady);
-	const downloadData = $derived(agentRegistry.downloadData);
-	const hasError = $derived(agentRegistry.hasError);
-	const errorMessage = $derived(agentRegistry.errorMessage);
-	const planMetrics = $derived(
-		getPlanMetrics(editedSpecContent || specContent || ""),
-	);
-	const planAgents = $derived(
-		allAgents.filter(
-			(agent) =>
-				agent.id === "agent-rootdep" ||
-				agent.id === "agent-system" ||
-				agent.events.length > 0,
-		),
-	);
-	const hasPlanTelemetry = $derived(
-		planAgents.some(
-			(agent) =>
-				agent.events.length > 0 ||
-				agent.toolCalls.length > 0 ||
-				Boolean(agent.thinking.trim()),
-		),
-	);
-	const planActivityStatusLabel = $derived.by(() => {
-		if (specContent) return "SPEC ready";
-		if (isExecutingPlan || isRunning) return "Generating plan";
-		if (hasPlanTelemetry) return "Trace captured";
-		return "Waiting";
-	});
-
-	async function handleSubmit() {
-		const message = inputValue.trim();
-		if (!message || isRunning) return;
-
-		chatHistory = [...chatHistory, { role: "user", content: message }];
-		inputValue = "";
-
-		if (isPlanMode && !isExecutingPlan) {
-			isExecutingPlan = true;
-			specContent = null;
-			planResponse = null;
-			chatHistory = [
-				...chatHistory,
-				{
-					role: "assistant",
-					content: `Planning mode: Analyzing your request to create a detailed implementation plan...\n\nThis may take a moment as I explore the codebase and create a step-by-step plan.`,
-				},
-			];
-			try {
-				const res = await fetch("/api/plan", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
-						message,
-						project_id: activeProjectId,
-						mode: activeProjectId ? "modify" : "generate",
-					}),
-				});
-				if (res.ok) {
-					const data = await res.json();
-					const projectId = data.project_id;
-					activeProjectId = projectId;
-					localStorage.setItem("chorus.activeProjectId", projectId);
-					agentRegistry.reset();
-					agentRegistry.isRunning = true;
-					planResponse = "Plan generation in progress...";
-					connectStream(projectId, "auto", "generate", "plan");
-				} else {
-					chatHistory = [
-						...chatHistory,
-						{
-							role: "assistant",
-							content:
-								"Plan mode is not available. Please use Build mode to generate the project.",
-						},
-					];
-					isExecutingPlan = false;
-				}
-			} catch (e) {
-				chatHistory = [
-					...chatHistory,
-					{
-						role: "assistant",
-						content:
-							"Failed to generate plan. Please try again or switch to Build mode.",
-					},
-				];
-				isExecutingPlan = false;
-			}
-			return;
+		/* Mesh visualization (CSS + SVG only — no fake artwork) */
+		.mesh-viz {
+			position: relative; aspect-ratio: 1 / 1;
+			width: 100%; max-width: 540px; margin-left: auto;
+		}
+		.mesh-viz svg { width: 100%; height: 100%; display: block; }
+		.mesh-viz .ring {
+			position: absolute; inset: 0; border-radius: 50%;
+			border: 1px solid rgba(255,255,255,0.10);
+		}
+		.mesh-viz .ring.r2 { inset: 12%; }
+		.mesh-viz .ring.r3 { inset: 26%; }
+		.mesh-viz .core {
+			position: absolute; left: 50%; top: 50%;
+			width: 92px; height: 92px;
+			transform: translate(-50%, -50%);
+			border-radius: 22px;
+			background: linear-gradient(180deg, oklch(82% 0.14 295), oklch(58% 0.20 295));
+			box-shadow: 0 0 60px oklch(70% 0.20 295 / 0.6),
+				inset 0 1px 0 rgba(255,255,255,0.4);
+			display: grid; place-items: center;
+			color: white;
+			font-family: var(--font-mono); font-size: 10px;
+			letter-spacing: 0.16em; text-transform: uppercase;
+		}
+		.mesh-viz .core::after {
+			content: ""; position: absolute; inset: -4px;
+			border-radius: 26px; border: 1px solid rgba(255,255,255,0.20);
+		}
+		.mesh-viz .node {
+			position: absolute; width: 56px; height: 56px;
+			border-radius: 16px;
+			background: rgba(255,255,255,0.06);
+			border: 1px solid rgba(255,255,255,0.14);
+			backdrop-filter: blur(12px);
+			display: grid; place-items: center;
+			font-family: var(--font-mono); font-size: 10px;
+			color: rgba(255,255,255,0.85);
+			letter-spacing: 0.04em;
+			box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+			animation: floatY 6s ease-in-out infinite;
+		}
+		.mesh-viz .node[data-pos="n"]  { top: 4%;  left: 50%; transform: translateX(-50%); animation-delay: 0s; }
+		.mesh-viz .node[data-pos="ne"] { top: 18%; right: 8%; animation-delay: -0.7s; }
+		.mesh-viz .node[data-pos="se"] { bottom: 18%; right: 8%; animation-delay: -1.4s; }
+		.mesh-viz .node[data-pos="s"]  { bottom: 4%; left: 50%; transform: translateX(-50%); animation-delay: -2.1s; }
+		.mesh-viz .node[data-pos="sw"] { bottom: 18%; left: 8%; animation-delay: -2.8s; }
+		.mesh-viz .node[data-pos="nw"] { top: 18%; left: 8%; animation-delay: -3.5s; }
+		.mesh-viz .node .glow { position: absolute; inset: -2px; border-radius: 18px; background: var(--violet); filter: blur(14px); opacity: 0.0; transition: opacity 400ms; }
+		.mesh-viz .node.live .glow { opacity: 0.45; animation: pulseGlow 2.4s ease-in-out infinite; }
+		.mesh-viz svg.lines line {
+			stroke: rgba(255,255,255,0.10);
+			stroke-width: 1;
+		}
+		.mesh-viz svg.lines line.active {
+			stroke: var(--violet-2);
+			stroke-width: 1.5;
+			stroke-dasharray: 4 6;
+			animation: dash 4s linear infinite;
+			filter: drop-shadow(0 0 6px oklch(70% 0.18 295 / 0.6));
 		}
 
-		if (planResponse && !isExecutingPlan) {
-			planResponse = null;
+		/* Logos strip */
+		.logos {
+			background: var(--ink-0);
+			color: rgba(255,255,255,0.5);
+			padding: 36px 32px;
+			border-top: 1px solid rgba(255,255,255,0.06);
+			border-bottom: 1px solid rgba(255,255,255,0.06);
+		}
+		.logos-inner {
+			max-width: 1240px; margin: 0 auto;
+			display: flex; gap: 40px; align-items: center;
+			flex-wrap: wrap; justify-content: space-between;
+		}
+		.logos .label {
+			font-family: var(--font-mono); font-size: 11px;
+			letter-spacing: 0.16em; text-transform: uppercase;
+		}
+		.logo-word {
+			font-family: var(--font-display);
+			font-style: italic;
+			font-size: 22px;
+			color: rgba(255,255,255,0.65);
+			letter-spacing: -0.02em;
+		}
+		.logo-word.mono {
+			font-family: var(--font-mono);
+			font-style: normal;
+			font-size: 14px;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+			font-weight: 500;
 		}
 
-		const res = await fetch("/api/chat", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				message,
-				project_id: activeProjectId,
-				mode: activeProjectId ? "modify" : "generate",
-				context_mode: $settings.defaultContextMode,
-			}),
-		});
+		/* How section: side-by-side IDE-like preview */
+		.ide {
+			position: relative;
+			border-radius: 24px;
+			overflow: hidden;
+			background: var(--ink-0);
+			color: rgba(255,255,255,0.85);
+			border: 1px solid rgba(255,255,255,0.08);
+			box-shadow: 0 30px 80px rgba(20,18,32,0.18);
+		}
+		.ide-bar {
+			display: flex; align-items: center; gap: 10px;
+			padding: 12px 16px;
+			border-bottom: 1px solid rgba(255,255,255,0.06);
+			background: rgba(255,255,255,0.03);
+			font-family: var(--font-mono); font-size: 11.5px;
+			color: rgba(255,255,255,0.55);
+		}
+		.ide-bar .dot { width: 10px; height: 10px; border-radius: 50%; background: rgba(255,255,255,0.14); }
+		.ide-bar .dot.r { background: oklch(70% 0.18 18); }
+		.ide-bar .dot.y { background: oklch(80% 0.14 75); }
+		.ide-bar .dot.g { background: oklch(75% 0.14 150); }
+		.ide-body { display: grid; grid-template-columns: 220px 1fr 320px; min-height: 460px; }
+		@media (max-width: 980px) { .ide-body { grid-template-columns: 1fr; } .ide-body > .ide-tree, .ide-body > .ide-side { display: none; } }
+		.ide-tree {
+			border-right: 1px solid rgba(255,255,255,0.06);
+			padding: 12px;
+			font-family: var(--font-mono);
+			font-size: 11.5px;
+			color: rgba(255,255,255,0.55);
+			background: rgba(255,255,255,0.02);
+		}
+		.ide-tree .group { padding: 8px 8px 4px; color: rgba(255,255,255,0.40); letter-spacing: 0.08em; text-transform: uppercase; font-size: 10px;}
+		.ide-tree ul { list-style: none; padding: 0; margin: 0 0 8px; }
+		.ide-tree li { padding: 4px 8px; border-radius: 6px; display: flex; gap: 8px; align-items: center; }
+		.ide-tree li::before { content: ""; width: 6px; height: 6px; border-radius: 1px; background: rgba(255,255,255,0.20); }
+		.ide-tree li.active { background: rgba(167,139,250,0.10); color: white; }
+		.ide-tree li.active::before { background: var(--violet); box-shadow: 0 0 6px var(--violet); }
+		.ide-code { padding: 18px 22px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; color: rgba(255,255,255,0.85); }
+		.ide-code .ln { color: rgba(255,255,255,0.30); padding-right: 14px; user-select: none; display: inline-block; width: 24px; text-align: right;}
+		.ide-code .kw { color: oklch(80% 0.14 295); }
+		.ide-code .st { color: oklch(82% 0.14 75); }
+		.ide-code .fn { color: oklch(78% 0.13 220); }
+		.ide-code .cm { color: rgba(255,255,255,0.40); font-style: italic; }
+		.ide-side {
+			border-left: 1px solid rgba(255,255,255,0.06);
+			background: rgba(255,255,255,0.02);
+			padding: 16px;
+			font-family: var(--font-mono);
+			font-size: 11.5px;
+			color: rgba(255,255,255,0.6);
+		}
+		.ide-side h6 { margin: 0 0 12px; font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(255,255,255,0.55); font-weight: 500; }
+		.ide-agent { display: flex; align-items: center; gap: 10px; padding: 8px; border-radius: 10px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.06); }
+		.ide-agent .av { width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 10px; color: white; }
+		.ide-agent .name { color: white; font-size: 11.5px; }
+		.ide-agent .stat { margin-left: auto; font-size: 10px; color: rgba(255,255,255,0.55); }
+		.ide-agent .stat::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 999px; margin-right: 6px; vertical-align: 1px;}
+		.ide-agent.run .stat::before { background: oklch(75% 0.16 150); box-shadow: 0 0 6px oklch(75% 0.16 150); animation: pulseGlow 1.4s infinite; }
+		.ide-agent.idle .stat::before { background: rgba(255,255,255,0.30); }
+		.ide-agent.done .stat::before { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
 
-		if (!res.ok) {
-			const errData = await res.json().catch(() => ({}));
-			if (res.status === 422 && errData.error === "vague_request") {
-				chatHistory = [
-					...chatHistory,
-					{
-						role: "assistant",
-						content: `I need more detail to help you. ${errData.clarification || "Please describe your project more specifically."}`,
-					},
-				];
-				return;
-			}
-			throw new Error(`HTTP ${res.status}`);
+		/* Feature grid */
+		.features {
+			display: grid;
+			grid-template-columns: repeat(12, 1fr);
+			gap: 16px;
+		}
+		.feat {
+			grid-column: span 4;
+			background: var(--paper-0);
+			border: 1px solid var(--line);
+			border-radius: 24px;
+			padding: 28px;
+			position: relative; overflow: hidden;
+			min-height: 280px;
+			display: flex; flex-direction: column; gap: 14px;
+			transition: border-color 200ms ease, transform 200ms ease;
+		}
+		.feat:hover { border-color: var(--line-strong); transform: translateY(-2px); }
+		.feat.wide { grid-column: span 6; }
+		.feat.full { grid-column: span 12; min-height: 320px;}
+		.feat .icon-tile {
+			width: 44px; height: 44px; border-radius: 12px;
+			display: grid; place-items: center;
+			background: var(--ink-0); color: white;
+		}
+		.feat h3 { font-size: 22px; line-height: 1.2; letter-spacing: -0.015em; margin: 4px 0 0; font-weight: 500;}
+		.feat p { color: var(--ink-4); font-size: 14.5px; line-height: 1.55; margin: 0; max-width: 42ch;}
+		.feat .visual { margin-top: auto; }
+		@media (max-width: 980px) {
+			.feat, .feat.wide, .feat.full { grid-column: span 12; }
 		}
 
-		const data = await res.json();
-		const projectId = data.project_id;
-		const contextMode = data.context_mode || "auto";
-		const runMode = data.mode || (activeProjectId ? "modify" : "generate");
-		activeProjectId = projectId;
-		localStorage.setItem("chorus.activeProjectId", projectId);
-		agentRegistry.reset();
-		agentRegistry.isRunning = true;
-		planResponse = null;
-		connectStream(projectId, contextMode, runMode);
-	}
-
-	async function handleExecutePlan() {
-		if (!specContent || isRunning) return;
-		const message = chatHistory.find((m) => m.role === "user")?.content;
-		if (!message) return;
-
-		chatHistory = [
-			...chatHistory,
-			{
-				role: "assistant",
-				content: `Approving the plan and starting implementation...`,
-			},
-		];
-
-		isExecutingPlan = true;
-		planResponse = "Plan approved. Implementation is starting...";
-
-		const res = await fetch("/api/approve", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				project_id: activeProjectId,
-				message,
-				spec_content: editedSpecContent,
-			}),
-		});
-
-		if (res.ok) {
-			const data = await res.json();
-			const projectId = data.project_id;
-			isPlanMode = false;
-			activeProjectId = projectId;
-			localStorage.setItem("chorus.activeProjectId", projectId);
-			agentRegistry.reset();
-			agentRegistry.isRunning = true;
-			specContent = null;
-			editedSpecContent = "";
-			isEditingSpec = false;
-			planResponse = null;
-			connectStream(projectId, "auto", data.mode || "approved", "build");
-		} else {
-			chatHistory = [
-				...chatHistory,
-				{
-					role: "assistant",
-					content: "Failed to approve the plan. Please try again.",
-				},
-			];
+		/* Stats band */
+		.stats {
+			display: grid; grid-template-columns: repeat(4, 1fr);
+			border: 1px solid var(--line);
+			border-radius: 24px;
+			overflow: hidden;
+			background: var(--paper-0);
 		}
-		isExecutingPlan = false;
-	}
-
-	function handleEditSpec() {
-		editedSpecContent = specContent || "";
-		isEditingSpec = true;
-	}
-
-	function handleCancelEditSpec() {
-		isEditingSpec = false;
-		editedSpecContent = specContent || "";
-	}
-
-	function handleSaveSpec() {
-		specContent = editedSpecContent;
-		isEditingSpec = false;
-	}
-
-	async function handlePauseAgent(agentId: string) {
-		if (!activeProjectId) return;
-		const name = agentId.replace('agent-', '');
-		try {
-			const res = await fetch(`/api/projects/${activeProjectId}/agents/${name}/pause`, { method: 'POST' });
-			if (!res.ok) console.error('Failed to pause agent:', await res.text());
-		} catch (e) {
-			console.error('Pause error:', e);
+		.stat {
+			padding: 28px;
+			border-right: 1px solid var(--line);
 		}
-	}
-
-	async function handleResumeAgent(agentId: string, message: string) {
-		if (!activeProjectId) return;
-		const name = agentId.replace('agent-', '');
-		try {
-			const res = await fetch(`/api/projects/${activeProjectId}/agents/${name}/resume`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ message }),
-			});
-			if (!res.ok) console.error('Failed to resume agent:', await res.text());
-		} catch (e) {
-			console.error('Resume error:', e);
+		.stat:last-child { border-right: none; }
+		.stat .num {
+			font-family: var(--font-display);
+			font-size: 56px; line-height: 1; letter-spacing: -0.02em;
 		}
-	}
-
-	async function handleDirectAgent(agentId: string, message: string) {
-		if (!activeProjectId) return;
-		const name = agentId.replace('agent-', '');
-		try {
-			const res = await fetch(`/api/projects/${activeProjectId}/directive`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ agent: name, message }),
-			});
-			if (!res.ok) console.error('Failed to send directive:', await res.text());
-		} catch (e) {
-			console.error('Directive error:', e);
-		}
-	}
-
-	async function handleStopSwarm() {
-		if (!activeProjectId) return;
-		try {
-			const res = await fetch(`/api/projects/${activeProjectId}/swarm/stop`, { method: 'POST' });
-			if (!res.ok) console.error('Failed to stop swarm:', await res.text());
-		} catch (e) {
-			console.error('Stop swarm error:', e);
-		}
-	}
-
-	async function submitAnswers() {
-		if (!pendingQuestion || !activeProjectId || isSubmittingAnswers) return;
-		isSubmittingAnswers = true;
-		try {
-			await fetch(`/api/projects/${activeProjectId}/answer`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					question_id: pendingQuestion.question_id,
-					answers: questionAnswers,
-				}),
-			});
-			pendingQuestion = null;
-			questionAnswers = [];
-		} catch (e) {
-			console.error('Failed to submit answers:', e);
-		} finally {
-			isSubmittingAnswers = false;
-		}
-	}
-
-	function getPlanMetrics(spec: string) {
-		const normalized = spec.trim();
-		const lines = spec ? spec.split(/\r?\n/).length : 0;
-		const words = normalized ? normalized.split(/\s+/).length : 0;
-		const headings = (spec.match(/^#{1,6}\s+/gm) || []).length;
-		const listItems = (spec.match(/^\s*[-*+]\s+/gm) || []).length;
-		const mermaidBlocks = (spec.match(/```mermaid/gi) || []).length;
-		const codeBlocks = Math.floor((spec.match(/```/g) || []).length / 2);
-
-		return {
-			lines,
-			words,
-			headings,
-			listItems,
-			mermaidBlocks,
-			codeBlocks,
-		};
-	}
-
-	function setPlanMode(next: boolean) {
-		if (isPlanMode === next) return;
-		isPlanMode = next;
-		if (isPlanMode) {
-			chatHistory = [
-				...chatHistory,
-				{
-					role: "assistant",
-					content:
-						"**Plan Mode** activated. When you describe what you want to build, I will create a detailed implementation plan for your review before writing any code.\n\nClick **Execute** to run the plan, or continue chatting to refine it.",
-				},
-			];
-		}
-	}
-
-	function connectStream(
-		projectId: string,
-		contextMode: string,
-		mode: string,
-		uiMode: string = "build",
-	) {
-		if (aguiClient) {
-			aguiClient.disconnect();
+		.stat .lab { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-5); margin-top: 8px; }
+		@media (max-width: 980px) {
+			.stats { grid-template-columns: repeat(2, 1fr); }
+			.stat:nth-child(2) { border-right: none; }
+			.stat:nth-child(1), .stat:nth-child(2) { border-bottom: 1px solid var(--line); }
 		}
 
-		aguiClient = new AGUIClient({
-			onOpen: (streamProjectId) => {
-				if (activeProjectId !== streamProjectId) return;
-				warmupAndLoadFiles(streamProjectId);
-			},
-			onRawEvent: (event) => {
-				agentRegistry.dispatchEvent(event);
-				if (
-					event.type === "RunStarted" ||
-					event.type === "RunFinished" ||
-					event.type === "download_ready"
-				) {
-					const eventProjectId = event.data?.project_id as
-						| string
-						| undefined;
-					if (eventProjectId) {
-						activeProjectId = eventProjectId;
-						localStorage.setItem(
-							"chorus.activeProjectId",
-							eventProjectId,
-						);
-					}
-				}
-			},
-			onText: (event) => {
-				if (event.content) {
-					chatHistory = [
-						...chatHistory,
-						{
-							role: "assistant",
-							content: `[${event.agent_name || "Agent"}]: ${event.content}`,
-						},
-					];
-				}
-			},
-			onError: (event) => {
-				console.error("SSE error event:", event);
-				if (event.content === "Connection error") {
-					return;
-				}
-				isExecutingPlan = false;
-			},
-			onPlanReady: (event) => {
-				const incomingSpec = (event.data?.spec_content as string) || "";
-				specContent = incomingSpec;
-				editedSpecContent = incomingSpec;
-				planResponse = "Plan ready for review.";
-				isExecutingPlan = false;
-				agentRegistry.isRunning = false;
-				if (activeProjectId) {
-					loadWorkspaceFiles(activeProjectId);
-				}
-			},
-			onFileCreated: (event) => {
-				const fp = event.data?.file_path as string | undefined;
-				if (fp && activeProjectId === projectId) {
-					lastWrittenFile = {
-						path: fp,
-						ts: Date.now(),
-						content: typeof event.data?.content === "string" ? event.data.content : undefined,
-						phase: typeof event.data?.phase === "string" ? event.data.phase : undefined,
-					};
-				}
-				scheduleFileTreeRefresh(projectId);
-			},
-			onDirectoryCreated: () => {
-				scheduleFileTreeRefresh(projectId);
-			},
-			onQuestion: (event) => {
-				const data = event.data as { question_id: string; questions: string[] } | undefined;
-				if (data?.question_id && Array.isArray(data.questions)) {
-					pendingQuestion = { question_id: data.question_id, questions: data.questions };
-					questionAnswers = new Array(data.questions.length).fill('');
-				}
-			},
-		});
-
-		// Auto-open the code view when a build starts so users see files appear live
-		if (mode === "generate" || mode === "approved" || mode === "modify" || uiMode === "plan") {
-			isCodeViewCollapsed = false;
+		/* Timeline / 4 steps */
+		.steps {
+			display: grid; grid-template-columns: repeat(4, 1fr);
+			gap: 16px;
 		}
-		if (!isCodeViewCollapsed) {
-			warmupAndLoadFiles(projectId);
+		.step { padding: 24px; border: 1px solid var(--line); border-radius: 20px; background: var(--paper-0);}
+		.step .num {
+			font-family: var(--font-mono); font-size: 11px;
+			letter-spacing: 0.16em; color: var(--ink-5);
 		}
+		.step h4 { font-size: 18px; font-weight: 500; margin: 8px 0 6px; letter-spacing: -0.01em;}
+		.step p { font-size: 13.5px; color: var(--ink-4); margin: 0; line-height: 1.55;}
+		@media (max-width: 980px) { .steps { grid-template-columns: repeat(2, 1fr); } }
 
-		aguiClient.connect(projectId, contextMode, mode, uiMode);
-	}
-
-	async function fetchProjectStatus(
-		projectId: string,
-	): Promise<ProjectStatusSnapshot | null> {
-		try {
-			const res = await fetch(`/api/status/${projectId}`);
-			if (!res.ok) return null;
-			return (await res.json()) as ProjectStatusSnapshot;
-		} catch (e) {
-			console.error("Failed to load project status:", e);
-			return null;
+		/* Big CTA */
+		.cta-band {
+			position: relative; overflow: hidden;
+			border-radius: 32px;
+			color: white;
+			padding: 96px 56px;
 		}
-	}
+		.cta-band h2 { color: white; }
+		.cta-band p { color: rgba(255,255,255,0.72); margin: 16px 0 32px; font-size: 17px; max-width: 60ch;}
 
-	async function readSpecFromWorkspace(projectId: string) {
-		try {
-			const res = await fetch(
-				`/api/workspace/${projectId}/read?path=${encodeURIComponent("SPEC.md")}`,
-			);
-			if (!res.ok) return null;
-			const data = await res.json();
-			return (data.content as string) || null;
-		} catch (e) {
-			console.error("Failed to read SPEC.md:", e);
-			return null;
+		/* Footer */
+		.foot-brand { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+
+		/* Section header */
+		.sec-head {
+			display: grid; grid-template-columns: 1fr 1fr; gap: 32px;
+			margin-bottom: 48px; align-items: end;
 		}
-	}
+		@media (max-width: 980px) { .sec-head { grid-template-columns: 1fr; } }
+		.sec-head .right { color: var(--ink-4); font-size: 15px; line-height: 1.6; }
 
-	function resetProjectViewState() {
-		agentRegistry.reset();
-		specContent = null;
-		editedSpecContent = "";
-		isEditingSpec = false;
-		planResponse = null;
-		showVersionHistory = false;
-	}
-
-	async function restoreProjectSession(projectId: string) {
-		resetProjectViewState();
-
-		const status = await fetchProjectStatus(projectId);
-		await Promise.all([loadChatHistory(projectId), warmupAndLoadFiles(projectId)]);
-
-		if (!status) {
-			isPlanMode = false;
-			return;
+		/* Pricing teaser cards */
+		.price-teaser {
+			display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
 		}
-
-		const normalizedStatus = status.status || "unknown";
-		const runMode = status.run_mode || "generate";
-		const contextMode = status.context_mode || "auto";
-
-		if (normalizedStatus === "planning") {
-			isPlanMode = true;
-			isExecutingPlan = true;
-			planResponse = "Plan generation in progress...";
-			agentRegistry.isRunning = true;
-			connectStream(projectId, contextMode, runMode, "plan");
-			return;
+		.price-card {
+			border: 1px solid var(--line);
+			border-radius: 24px;
+			padding: 28px;
+			background: var(--paper-0);
+			display: flex; flex-direction: column; gap: 14px;
 		}
-
-		if (normalizedStatus === "plan_ready") {
-			isPlanMode = true;
-			isExecutingPlan = false;
-			const savedSpec =
-				status.spec_content ||
-				(typeof status.spec?.spec_content === "string"
-					? status.spec.spec_content
-					: null);
-			const restoredSpec =
-				savedSpec || (await readSpecFromWorkspace(projectId));
-			specContent = restoredSpec || "";
-			editedSpecContent = specContent;
-			planResponse = specContent ? "Plan ready for review." : null;
-			return;
+		.price-card.feat-tier {
+			background: var(--ink-0); color: white; border-color: var(--ink-0);
+			position: relative;
 		}
+		.price-card.feat-tier .amt { color: white; }
+		.price-card.feat-tier p, .price-card.feat-tier li { color: rgba(255,255,255,0.72); }
+		.price-card .tier { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-5); }
+		.price-card.feat-tier .tier { color: var(--violet-2); }
+		.price-card .amt { font-family: var(--font-display); font-size: 56px; line-height: 1; letter-spacing: -0.02em;}
+		.price-card .amt small { font-size: 14px; font-family: var(--font-sans); color: var(--ink-5); }
+		.price-card.feat-tier .amt small { color: rgba(255,255,255,0.55);}
+		.price-card ul { padding: 0; margin: 0 0 12px; list-style: none; display: grid; gap: 8px; font-size: 13.5px; color: var(--ink-3); }
+		.price-card li { display: flex; align-items: flex-start; gap: 8px; }
+		.price-card li svg { flex-shrink: 0; margin-top: 3px; color: var(--violet-d);}
+		.price-card.feat-tier li svg { color: var(--violet-2); }
+		@media (max-width: 980px) { .price-teaser { grid-template-columns: 1fr; } }
 
-		isPlanMode = false;
-		isExecutingPlan = false;
-
-		if (normalizedStatus === "running") {
-			agentRegistry.isRunning = true;
-			connectStream(projectId, contextMode, runMode, "build");
-			return;
+		/* Quote */
+		blockquote.q {
+			margin: 0;
+			font-family: var(--font-display);
+			font-size: clamp(28px, 3.4vw, 44px);
+			line-height: 1.15;
+			letter-spacing: -0.015em;
+			color: var(--ink-1);
 		}
-
-		if (
-			normalizedStatus === "pending" &&
-			runMode !== "plan" &&
-			status.spec?.mode !== "new"
-		) {
-			agentRegistry.isRunning = true;
-			connectStream(projectId, contextMode, runMode, "build");
-			return;
+		.q-cite { margin-top: 24px; display: flex; align-items: center; gap: 14px; }
+		.q-cite .av {
+			width: 44px; height: 44px; border-radius: 50%;
+			background: linear-gradient(135deg, var(--violet), var(--cyan));
 		}
+		.q-cite .who { font-size: 13.5px; line-height: 1.4; color: var(--ink-3); }
+		.q-cite .who span { display: block; color: var(--ink-5); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; margin-top: 2px;}
+	</style>
+</svelte:head>
 
-		agentRegistry.isRunning = false;
-	}
+<!-- ── NAV ───────────────────────────────────────────────── -->
+<nav class="nav on-dark" data-screen-label="Landing — Nav">
+	<a href="/" class="nav-brand">
+		<span class="hex-mark"><svg viewBox="0 0 32 32" fill="none">
+			<path d="M16 2 L28 9 L28 23 L16 30 L4 23 L4 9 Z" fill="url(#g1)" stroke="rgba(255,255,255,0.5)" stroke-width="1"/>
+			<path d="M16 9 L22 12.5 L22 19.5 L16 23 L10 19.5 L10 12.5 Z" fill="rgba(255,255,255,0.95)"/>
+			<defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#c4b5fd"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>
+		</svg></span>
+		<span style="color:white">Chorus</span>
+	</a>
+	<div class="nav-links">
+		<a href="/" class="nav-link active">Product</a>
+		<a href="/pricing" class="nav-link">Pricing</a>
+		<a href="#how" class="nav-link">How it works</a>
+		<a href="#" class="nav-link">Docs</a>
+		<a href="#" class="nav-link">Blog</a>
+	</div>
+	<a href="/login" class="nav-link" style="color: rgba(255,255,255,0.85)">Sign in</a>
+	<a href="/register" class="btn btn-luminous btn-sm nav-cta">
+		Start free
+		<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+	</a>
+</nav>
 
-	async function startNewProject() {
-		if (aguiClient) {
-			aguiClient.disconnect();
-		}
-
-		try {
-			const res = await fetch("/api/projects", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					name: "New Project",
-					message:
-						"Describe the new Spring Boot + Svelte project you want to build.",
-				}),
-			});
-
-			if (!res.ok) {
-				throw new Error(`HTTP ${res.status}`);
-			}
-
-			const data = await res.json();
-			activeProjectId = data.project_id;
-			localStorage.setItem("chorus.activeProjectId", data.project_id);
-		} catch (e) {
-			console.error("Failed to create new project:", e);
-			activeProjectId = null;
-			localStorage.removeItem("chorus.activeProjectId");
-		}
-
-		resetProjectViewState();
-		showVersionHistory = false;
-		isCodeViewCollapsed = true;
-		isPlanMode = false;
-		isExecutingPlan = false;
-		chatHistory = [
-			{
-				role: "assistant",
-				content:
-					"Describe the new Spring Boot + Svelte project you want to build.",
-			},
-		];
-	}
-
-	function toggleVersionHistory() {
-		showVersionHistory = !showVersionHistory;
-		if (showVersionHistory) {
-			isCodeViewCollapsed = true;
-		}
-	}
-
-	function handleVersionRestore(checkpointId: string) {
-		showVersionHistory = false;
-		if (activeProjectId) {
-			loadChatHistory(activeProjectId);
-			warmupAndLoadFiles(activeProjectId);
-		}
-	}
-
-	async function switchProject(projectId: string) {
-		if (aguiClient) {
-			aguiClient.disconnect();
-		}
-		activeProjectId = projectId;
-		localStorage.setItem("chorus.activeProjectId", projectId);
-		await restoreProjectSession(projectId);
-	}
-
-	async function deleteProject(projectId: string) {
-		const res = await fetch(`/api/projects/${projectId}`, {
-			method: "DELETE",
-		});
-		if (!res.ok) {
-			const err = await res.json().catch(() => ({}));
-			throw new Error(err.error || "Failed to delete project");
-		}
-		// If the deleted project was active, clear state
-		if (activeProjectId === projectId) {
-			activeProjectId = null;
-			localStorage.removeItem("chorus.activeProjectId");
-			if (aguiClient) {
-				aguiClient.disconnect();
-			}
-			resetProjectViewState();
-			chatHistory = [
-				{
-					role: "assistant",
-					content:
-						"Welcome! I can generate full Spring Boot + Svelte projects from your description. What would you like to build?",
-				},
-			];
-		}
-	}
-
-	async function warmupAndLoadFiles(projectId: string) {
-		try {
-			const warmupRes = await fetch(
-				`/api/workspace/${projectId}/warmup`,
-				{ method: "POST" },
-			);
-			if (warmupRes.ok) {
-				const warmupData = await warmupRes.json();
-				console.log("[workspace] Warmup status:", warmupData.status);
-			}
-		} catch (e) {
-			console.error("Failed to warmup workspace:", e);
-		}
-
-		if (!isCodeViewCollapsed) {
-			loadWorkspaceFiles(projectId);
-		}
-	}
-
-	async function loadChatHistory(projectId: string) {
-		try {
-			const res = await fetch(`/api/projects/${projectId}/messages`);
-			if (res.ok) {
-				const data = await res.json();
-				if (data.messages && data.messages.length > 0) {
-					chatHistory = data.messages.map((m: any) => ({
-						role: m.role,
-						content: m.content,
-						metadata: m.metadata,
-					}));
-				} else {
-					chatHistory = [];
-				}
-			}
-		} catch (e) {
-			console.error("Failed to load chat history:", e);
-			chatHistory = [];
-		}
-	}
-
-	async function loadWorkspaceFiles(projectId: string) {
-		const requestSeq = ++_workspaceLoadSeq;
-		try {
-			const res = await fetch(`/api/workspace/${projectId}/files`);
-			if (requestSeq !== _workspaceLoadSeq || activeProjectId !== projectId) {
-				return;
-			}
-			if (res.ok) {
-				const data = await res.json();
-				if (requestSeq !== _workspaceLoadSeq || activeProjectId !== projectId) {
-					return;
-				}
-				workspaceFiles = data.files || [];
-			}
-		} catch (e) {
-			if (requestSeq !== _workspaceLoadSeq || activeProjectId !== projectId) {
-				return;
-			}
-			console.error("Failed to load workspace files:", e);
-		}
-	}
-
-	function scheduleFileTreeRefresh(projectId: string) {
-		if (_fileRefreshTimer) clearTimeout(_fileRefreshTimer);
-		_fileRefreshTimer = setTimeout(() => {
-			if (activeProjectId === projectId) loadWorkspaceFiles(projectId);
-		}, 600);
-	}
-
-	function toggleCodeView() {
-		isCodeViewCollapsed = !isCodeViewCollapsed;
-		if (!isCodeViewCollapsed) {
-			showVersionHistory = false;
-		}
-		if (!isCodeViewCollapsed && activeProjectId) {
-			warmupAndLoadFiles(activeProjectId);
-		}
-	}
-
-	onMount(() => {
-		agentRegistry.initialize();
-
-		const checkMobile = () => {
-			isMobile = window.innerWidth < 768;
-			if (isMobile) isSidebarCollapsed = true;
-		};
-		checkMobile();
-		window.addEventListener("resize", checkMobile);
-
-		// Only show welcome message on page load - user must explicitly select a project to resume
-		chatHistory = [
-			{
-				role: "assistant",
-				content:
-					"Welcome! I can generate full Spring Boot + Svelte projects from your description. What would you like to build?",
-			},
-		];
-
-		const savedProjectId = localStorage.getItem("chorus.activeProjectId");
-		if (savedProjectId) {
-			activeProjectId = savedProjectId;
-			void restoreProjectSession(savedProjectId);
-		}
-
-		return () => window.removeEventListener("resize", checkMobile);
-	});
-
-	onDestroy(() => {
-		if (_fileRefreshTimer) {
-			clearTimeout(_fileRefreshTimer);
-		}
-		if (aguiClient) {
-			aguiClient.disconnect();
-		}
-	});
-</script>
-
-<div class="flex h-screen w-full siri-mesh-bg text-foreground overflow-hidden">
-	<!-- Left: Project Sidebar -->
-	<ProjectSidebar
-		{activeProjectId}
-		isCollapsed={isSidebarCollapsed}
-		{isMobile}
-		onToggle={() => (isSidebarCollapsed = !isSidebarCollapsed)}
-		onSelect={switchProject}
-		onNew={startNewProject}
-		onDelete={deleteProject}
-	/>
-
-	<!-- Right: Main Content -->
-	<div class="flex flex-1 flex-col overflow-hidden relative">
-		<!-- Header -->
-		<header
-			class="mx-4 mt-4 rounded-[2rem] flex items-center gap-3 border border-white/50 bg-white/40 shadow-[0_8px_30px_rgb(0,0,0,0.04)] backdrop-blur-xl px-6 py-4 shrink-0 transition-all"
-		>
-			{#if isMobile && isSidebarCollapsed}
-				<button
-					onclick={() => (isSidebarCollapsed = false)}
-					class="h-9 w-9 flex items-center justify-center rounded-xl border border-white/40 bg-white/40 shadow-sm text-muted-foreground hover:bg-white transition-all mr-1"
-				>
-					<PanelLeftOpen class="h-4.5 w-4.5" />
-				</button>
-			{/if}
-
-			<div
-				class="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/20 shadow-[0_0_12px_rgba(var(--primary),0.1)]"
-			>
-				<Hexagon class="h-4.5 w-4.5 text-primary" />
+<!-- ── HERO ──────────────────────────────────────────────── -->
+<section class="hero mesh-dark drift grain" data-screen-label="Landing — Hero">
+	<div class="hex-bg"></div>
+	<div class="hero-inner">
+		<div>
+			<span class="pill on-dark"><span class="dot"></span>v2.0 — Now with Plan Mode</span>
+			<h1>Ship full-stack apps from a <em>single sentence.</em></h1>
+			<p class="lede">A decentralized swarm of AI agents writes your backend, frontend, infrastructure, and tests in parallel. No supervisor, no bottleneck — just emergent code from peer-to-peer agents talking on a shared blackboard.</p>
+			<div class="hero-cta">
+				<a href="/register" class="btn btn-luminous btn-lg">
+					Build your first project
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+				</a>
+				<a href="#how" class="btn btn-on-dark-ghost btn-lg">
+					<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+					Watch a 90s demo
+				</a>
 			</div>
-			<div class="flex flex-col">
-				<h1 class="text-sm font-bold tracking-tight">Chorus</h1>
-				<span
-					class="text-[10px] text-muted-foreground/60 uppercase tracking-[0.12em] font-medium"
-					>Parallel Mesh Architecture</span
-				>
+			<div class="hero-meta">
+				<span class="seg">Spring Boot 4 · Svelte 5 · Tailwind 4</span>
+				<span class="seg">Powered by MiniMax M2.7</span>
 			</div>
-			<div class="ml-auto flex items-center gap-4">
-				<div
-					class="flex items-center rounded-full border border-white/45 bg-white/30 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_10px_28px_rgba(15,23,42,0.12)] backdrop-blur-3xl"
-				>
-					<button
-						type="button"
-						class="relative overflow-hidden flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium transition-all duration-200 {!isPlanMode
-							? 'text-slate-900 shadow-[0_10px_24px_rgba(15,23,42,0.14)] ring-1 ring-white/65'
-							: 'text-muted-foreground hover:bg-white/35 hover:text-foreground'}"
-						onclick={() => setPlanMode(false)}
-					>
-						{#if !isPlanMode}
-							<span
-								class="pointer-events-none absolute inset-[1px] rounded-full bg-[linear-gradient(180deg,rgba(255,255,255,0.58),rgba(255,255,255,0.22)_54%,rgba(255,255,255,0.1))] backdrop-blur-3xl shadow-[inset_0_1px_0_rgba(255,255,255,0.96),inset_0_-1px_0_rgba(255,255,255,0.18),0_14px_28px_rgba(15,23,42,0.12)]"
-							></span>
-							<span
-								class="pointer-events-none absolute inset-x-2 top-1 h-px rounded-full bg-white/85 blur-[1px]"
-							></span>
-							<span
-								class="pointer-events-none absolute inset-x-2 bottom-1 h-2 rounded-full bg-primary/10 blur-md"
-							></span>
-						{/if}
-						<Hexagon class="relative z-10 h-3.5 w-3.5" />
-						<span class="relative z-10 hidden sm:inline">Build</span
-						>
-					</button>
-					<button
-						type="button"
-						class="relative overflow-hidden flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium transition-all duration-200 {isPlanMode
-							? 'text-slate-900 shadow-[0_10px_24px_rgba(15,23,42,0.14)] ring-1 ring-white/65'
-							: 'text-muted-foreground hover:bg-white/35 hover:text-foreground'}"
-						onclick={() => setPlanMode(true)}
-					>
-						{#if isPlanMode}
-							<span
-								class="pointer-events-none absolute inset-[1px] rounded-full bg-[linear-gradient(180deg,rgba(255,255,255,0.62),rgba(255,255,255,0.26)_54%,rgba(255,255,255,0.12))] backdrop-blur-3xl shadow-[inset_0_1px_0_rgba(255,255,255,0.96),inset_0_-1px_0_rgba(255,255,255,0.22),0_14px_28px_rgba(15,23,42,0.14)]"
-							></span>
-							<span
-								class="pointer-events-none absolute inset-x-2 top-1 h-px rounded-full bg-white/85 blur-[1px]"
-							></span>
-							<span
-								class="pointer-events-none absolute inset-x-2 bottom-1 h-2 rounded-full bg-primary/10 blur-md"
-							></span>
-						{/if}
-						<Map class="relative z-10 h-3.5 w-3.5" />
-						<span class="relative z-10 hidden sm:inline">Plan</span>
-					</button>
-				</div>
-				{#if activeProjectId}
-					<div
-						class="flex items-center rounded-full border border-white/45 bg-white/30 p-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.72),0_10px_28px_rgba(15,23,42,0.12)] backdrop-blur-3xl"
-					>
-						<button
-							type="button"
-							class="relative overflow-hidden flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium transition-all duration-200 {showVersionHistory
-								? 'text-slate-900 shadow-[0_10px_24px_rgba(15,23,42,0.14)] ring-1 ring-white/65'
-								: 'text-muted-foreground hover:bg-white/35 hover:text-foreground'}"
-							onclick={toggleVersionHistory}
-						>
-							{#if showVersionHistory}
-								<span
-									class="pointer-events-none absolute inset-[1px] rounded-full bg-[linear-gradient(180deg,rgba(255,255,255,0.62),rgba(255,255,255,0.26)_54%,rgba(255,255,255,0.12))] backdrop-blur-3xl shadow-[inset_0_1px_0_rgba(255,255,255,0.96),inset_0_-1px_0_rgba(255,255,255,0.22),0_14px_28px_rgba(15,23,42,0.14)]"
-								></span>
-								<span
-									class="pointer-events-none absolute inset-x-2 top-1 h-px rounded-full bg-white/85 blur-[1px]"
-								></span>
-								<span
-									class="pointer-events-none absolute inset-x-2 bottom-1 h-2 rounded-full bg-primary/10 blur-md"
-								></span>
-							{/if}
-							<History class="relative z-10 h-3.5 w-3.5" />
-							<span class="relative z-10 hidden sm:inline"
-								>History</span
-							>
-						</button>
-						<button
-							type="button"
-							class="relative overflow-hidden flex items-center gap-2 rounded-full px-3 py-1.5 text-[11px] font-medium transition-all duration-200 {isCodeViewCollapsed
-								? 'text-muted-foreground hover:bg-white/35 hover:text-foreground'
-								: 'text-slate-900 shadow-[0_10px_24px_rgba(15,23,42,0.14)] ring-1 ring-white/65'}"
-							onclick={toggleCodeView}
-						>
-							{#if !isCodeViewCollapsed}
-								<span
-									class="pointer-events-none absolute inset-[1px] rounded-full bg-[linear-gradient(180deg,rgba(255,255,255,0.62),rgba(255,255,255,0.26)_54%,rgba(255,255,255,0.12))] backdrop-blur-3xl shadow-[inset_0_1px_0_rgba(255,255,255,0.96),inset_0_-1px_0_rgba(255,255,255,0.22),0_14px_28px_rgba(15,23,42,0.14)]"
-								></span>
-								<span
-									class="pointer-events-none absolute inset-x-2 top-1 h-px rounded-full bg-white/85 blur-[1px]"
-								></span>
-								<span
-									class="pointer-events-none absolute inset-x-2 bottom-1 h-2 rounded-full bg-primary/10 blur-md"
-								></span>
-							{/if}
-							<Code2 class="relative z-10 h-3.5 w-3.5" />
-							<span class="relative z-10 hidden sm:inline"
-								>Code</span
-							>
-						</button>
-					</div>
-				{/if}
-				{#if isRunning}
-					<button
-						type="button"
-						onclick={handleStopSwarm}
-						class="flex items-center gap-1.5 rounded-full bg-rose-500/10 border border-rose-500/20 px-3 py-1 text-[11px] font-medium text-rose-600 hover:bg-rose-500/20 transition-colors cursor-pointer"
-						title="Stop all running agents"
-					>
-						<Square class="h-3 w-3 fill-current" />
-						<span>Stop</span>
-					</button>
-					<div
-						class="flex items-center gap-2 rounded-full bg-primary/10 border border-primary/20 px-3 py-1"
-					>
-						<span class="relative flex h-2 w-2">
-							<span
-								class="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-60"
-							></span>
-							<span
-								class="relative inline-flex h-2 w-2 rounded-full bg-primary"
-							></span>
-						</span>
-						<span class="text-[11px] font-medium text-primary"
-							>{agentRegistry.activeAgents.length} active</span
-						>
-					</div>
-				{/if}
-				<span
-					class="text-[11px] text-muted-foreground/50 hidden sm:inline"
-				>
-					Powered by MiniMax M2.7
-				</span>
+		</div>
+
+		<!-- Mesh visualization -->
+		<div class="hero-visual">
+			<div class="mesh-viz" aria-hidden="true">
+				<div class="ring"></div>
+				<div class="ring r2"></div>
+				<div class="ring r3"></div>
+				<svg class="lines" viewBox="0 0 100 100" preserveAspectRatio="none">
+					<line class="active" x1="50" y1="50" x2="50" y2="8"/>
+					<line class="active" x1="50" y1="50" x2="86" y2="22"/>
+					<line x1="50" y1="50" x2="86" y2="78"/>
+					<line class="active" x1="50" y1="50" x2="50" y2="92"/>
+					<line x1="50" y1="50" x2="14" y2="78"/>
+					<line class="active" x1="50" y1="50" x2="14" y2="22"/>
+					<line x1="50" y1="8" x2="86" y2="22"/>
+					<line x1="86" y1="22" x2="86" y2="78"/>
+					<line x1="86" y1="78" x2="50" y2="92"/>
+					<line x1="50" y1="92" x2="14" y2="78"/>
+					<line x1="14" y1="78" x2="14" y2="22"/>
+					<line x1="14" y1="22" x2="50" y2="8"/>
+				</svg>
+				<div class="core">⌬<br/>core</div>
+				<div class="node live" data-pos="n"><span class="glow"></span>root</div>
+				<div class="node live" data-pos="ne"><span class="glow"></span>back</div>
+				<div class="node" data-pos="se"><span class="glow"></span>front</div>
+				<div class="node live" data-pos="s"><span class="glow"></span>devops</div>
+				<div class="node" data-pos="sw"><span class="glow"></span>pkg</div>
+				<div class="node live" data-pos="nw"><span class="glow"></span>rag</div>
 			</div>
-		</header>
-
-		<!-- Main content areas -->
-		<div class="flex flex-1 overflow-hidden">
-			<!-- Left: Mesh Grid -->
-			<main class="flex flex-1 flex-col overflow-hidden">
-				<ScrollArea class="flex-1 min-h-0">
-					<div class="p-5 space-y-5 max-w-6xl mx-auto">
-						<!-- Chat Transcript -->
-						{#if chatHistory.length > 0}
-							<div class="space-y-4">
-								{#each chatHistory as message, index (index)}
-									<ChatMessage
-										message={{
-											id: `${index}`,
-											role: message.role,
-											content: message.content,
-											timestamp: Date.now(),
-										}}
-									/>
-								{/each}
-							</div>
-						{/if}
-
-						<!-- Plan Mode: Live Activity -->
-						{#if isPlanMode &&
-							(hasPlanTelemetry ||
-								isExecutingPlan ||
-								Boolean(planResponse) ||
-								Boolean(specContent))}
-							<PlanActivityPanel
-								agents={planAgents}
-								isStreaming={isExecutingPlan || isRunning}
-								hasSpec={Boolean(specContent)}
-								statusLabel={planActivityStatusLabel}
-							/>
-						{/if}
-
-						<!-- Plan Mode: SPEC.md Viewer/Editor -->
-						{#if specContent}
-							<div
-								class="rounded-[2.5rem] border border-cyan-200/45 bg-[linear-gradient(145deg,rgba(255,255,255,0.88),rgba(239,246,255,0.68))] p-4 shadow-[0_24px_70px_rgba(15,23,42,0.12)] backdrop-blur-2xl"
-							>
-								<div
-									class="flex flex-wrap items-start justify-between gap-4 border-b border-white/55 pb-4"
-								>
-									<div class="max-w-3xl">
-										<div class="flex items-center gap-3">
-											<div
-												class="flex h-11 w-11 items-center justify-center rounded-2xl border border-cyan-200/60 bg-cyan-50/80 text-cyan-700 shadow-[0_0_20px_rgba(34,211,238,0.18)]"
-											>
-												<Map class="h-5 w-5" />
-											</div>
-											<div>
-												<p
-													class="text-[11px] font-semibold uppercase tracking-[0.18em] text-cyan-700/70"
-												>
-													Plan Mode
-												</p>
-												<h3
-													class="text-xl font-semibold tracking-tight text-slate-900"
-												>
-													SPEC.md implementation
-													review
-												</h3>
-											</div>
-										</div>
-										<p
-											class="mt-3 max-w-2xl text-sm leading-6 text-slate-600"
-										>
-											This is the review surface for the
-											generated specification. Rendered
-											Markdown, Mermaid diagrams, and the
-											approval action are all designed to
-											feel closer to a professional IDE
-											planning stage.
-										</p>
-									</div>
-									<div class="flex flex-wrap gap-2">
-										<div
-											class="rounded-full border border-white/70 bg-white/70 px-3 py-1.5 text-[11px] font-medium text-slate-600 shadow-sm"
-										>
-											{planMetrics.lines} lines
-										</div>
-										<div
-											class="rounded-full border border-white/70 bg-white/70 px-3 py-1.5 text-[11px] font-medium text-slate-600 shadow-sm"
-										>
-											{planMetrics.words} words
-										</div>
-										<div
-											class="rounded-full border border-white/70 bg-white/70 px-3 py-1.5 text-[11px] font-medium text-slate-600 shadow-sm"
-										>
-											{planMetrics.headings} headings
-										</div>
-										<div
-											class="rounded-full border border-white/70 bg-white/70 px-3 py-1.5 text-[11px] font-medium text-slate-600 shadow-sm"
-										>
-											{planMetrics.mermaidBlocks} diagrams
-										</div>
-									</div>
-								</div>
-
-								<div
-									class="mt-4 grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]"
-								>
-									<div class="space-y-4">
-										<div
-											class="rounded-[2rem] border border-white/60 bg-white/60 p-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]"
-										>
-											<p
-												class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-											>
-												Plan Snapshot
-											</p>
-											<div
-												class="mt-4 grid grid-cols-2 gap-3"
-											>
-												<div
-													class="rounded-2xl border border-white/70 bg-white/80 p-3"
-												>
-													<p
-														class="text-[11px] text-slate-500"
-													>
-														Sections
-													</p>
-													<p
-														class="mt-1 text-lg font-semibold text-slate-900"
-													>
-														{planMetrics.headings}
-													</p>
-												</div>
-												<div
-													class="rounded-2xl border border-white/70 bg-white/80 p-3"
-												>
-													<p
-														class="text-[11px] text-slate-500"
-													>
-														Lists
-													</p>
-													<p
-														class="mt-1 text-lg font-semibold text-slate-900"
-													>
-														{planMetrics.listItems}
-													</p>
-												</div>
-												<div
-													class="rounded-2xl border border-white/70 bg-white/80 p-3"
-												>
-													<p
-														class="text-[11px] text-slate-500"
-													>
-														Code
-													</p>
-													<p
-														class="mt-1 text-lg font-semibold text-slate-900"
-													>
-														{planMetrics.codeBlocks}
-													</p>
-												</div>
-												<div
-													class="rounded-2xl border border-white/70 bg-white/80 p-3"
-												>
-													<p
-														class="text-[11px] text-slate-500"
-													>
-														Mermaid
-													</p>
-													<p
-														class="mt-1 text-lg font-semibold text-slate-900"
-													>
-														{planMetrics.mermaidBlocks}
-													</p>
-												</div>
-											</div>
-										</div>
-
-										<div
-											class="rounded-[2rem] border border-white/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.82),rgba(245,250,255,0.72))] p-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]"
-										>
-											<p
-												class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-											>
-												Workflow
-											</p>
-											<div class="mt-3 space-y-3">
-												<div
-													class="flex items-start gap-3"
-												>
-													<div
-														class="mt-1 h-2.5 w-2.5 rounded-full bg-cyan-500 shadow-[0_0_12px_rgba(34,211,238,0.45)]"
-													></div>
-													<div>
-														<p
-															class="text-sm font-medium text-slate-900"
-														>
-															Review plan
-														</p>
-														<p
-															class="text-[12px] leading-5 text-slate-500"
-														>
-															Inspect the
-															generated Markdown
-															and diagrams.
-														</p>
-													</div>
-												</div>
-												<div
-													class="flex items-start gap-3"
-												>
-													<div
-														class="mt-1 h-2.5 w-2.5 rounded-full bg-amber-500 shadow-[0_0_12px_rgba(245,158,11,0.35)]"
-													></div>
-													<div>
-														<p
-															class="text-sm font-medium text-slate-900"
-														>
-															Edit if needed
-														</p>
-														<p
-															class="text-[12px] leading-5 text-slate-500"
-														>
-															Make changes before
-															approval, then keep
-															the rendered preview
-															in sync.
-														</p>
-													</div>
-												</div>
-												<div
-													class="flex items-start gap-3"
-												>
-													<div
-														class="mt-1 h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.35)]"
-													></div>
-													<div>
-														<p
-															class="text-sm font-medium text-slate-900"
-														>
-															Approve & execute
-														</p>
-														<p
-															class="text-[12px] leading-5 text-slate-500"
-														>
-															The approved SPEC is
-															written back and the
-															build swarm starts.
-														</p>
-													</div>
-												</div>
-											</div>
-										</div>
-
-										<div
-											class="rounded-[2rem] border border-white/60 bg-white/60 p-4 shadow-[0_12px_28px_rgba(15,23,42,0.06)]"
-										>
-											<p
-												class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-											>
-												Status
-											</p>
-											<p
-												class="mt-3 text-sm leading-6 text-slate-600"
-											>
-												{#if isEditingSpec}
-													You are editing the plan.
-													Save to keep your changes,
-													or cancel to restore the
-													last approved text.
-												{:else}
-													The generated plan is ready
-													for inspection. Use the
-													review pane to validate the
-													scope before execution.
-												{/if}
-											</p>
-										</div>
-									</div>
-
-									<div
-										class="overflow-hidden rounded-[2.25rem] border border-white/65 bg-white/75 shadow-[0_16px_40px_rgba(15,23,42,0.08)]"
-									>
-										<div
-											class="flex flex-wrap items-center justify-between gap-3 border-b border-white/60 px-4 py-3"
-										>
-											<div
-												class="flex items-center gap-2"
-											>
-												<div
-													class="rounded-full border border-cyan-200/60 bg-cyan-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-cyan-700"
-												>
-													{isEditingSpec
-														? "Editing"
-														: "Preview"}
-												</div>
-												<span
-													class="text-[12px] text-slate-500"
-													>Markdown + Mermaid renderer</span
-												>
-											</div>
-											<div class="flex gap-2">
-												{#if isEditingSpec}
-													<Button
-														variant="outline"
-														size="sm"
-														onclick={handleCancelEditSpec}
-													>
-														Cancel
-													</Button>
-													<Button
-														size="sm"
-														onclick={handleSaveSpec}
-													>
-														Save Changes
-													</Button>
-												{:else}
-													<Button
-														variant="outline"
-														size="sm"
-														onclick={handleEditSpec}
-													>
-														Edit Plan
-													</Button>
-												{/if}
-											</div>
-										</div>
-
-										{#if isEditingSpec}
-											<div
-												class="grid gap-0 xl:grid-cols-2"
-											>
-												<div
-													class="border-b border-white/50 xl:border-b-0 xl:border-r xl:border-white/50"
-												>
-													<div class="p-4">
-														<div
-															class="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-														>
-															SPEC editor
-														</div>
-														<textarea
-															bind:value={
-																editedSpecContent
-															}
-															class="h-[560px] w-full resize-none rounded-3xl border border-cyan-200/40 bg-slate-950/96 p-4 font-mono text-[13px] leading-6 text-slate-100 shadow-[0_16px_36px_rgba(15,23,42,0.22)] outline-none placeholder:text-slate-500 focus:border-cyan-300/60 focus:ring-2 focus:ring-cyan-200/40"
-															placeholder="Edit SPEC.md content..."
-														></textarea>
-													</div>
-												</div>
-												<div class="min-w-0 p-4">
-													<div
-														class="mb-2 flex items-center justify-between"
-													>
-														<div
-															class="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500"
-														>
-															Live preview
-														</div>
-														{#if editedSpecContent !== specContent}
-															<span
-																class="rounded-full border border-amber-200/60 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700"
-															>
-																Unsaved changes
-															</span>
-														{/if}
-													</div>
-													<div
-														class="h-[560px] overflow-y-auto rounded-3xl border border-white/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.86),rgba(247,250,252,0.78))] p-5"
-													>
-														<PlanSpecPreview
-															source={editedSpecContent}
-														/>
-													</div>
-												</div>
-											</div>
-										{:else}
-											<div
-												class="h-[620px] overflow-y-auto p-5"
-											>
-												<PlanSpecPreview
-													source={editedSpecContent}
-												/>
-											</div>
-										{/if}
-
-										<div
-											class="border-t border-white/60 bg-[linear-gradient(180deg,rgba(255,255,255,0.72),rgba(247,250,252,0.92))] px-4 py-4"
-										>
-											<div
-												class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"
-											>
-												<p
-													class="text-sm leading-6 text-slate-600"
-												>
-													Review the generated plan
-													carefully. If it looks
-													right, approve it and start
-													the implementation swarm.
-												</p>
-												<div
-													class="flex flex-wrap gap-3"
-												>
-													<Button
-														variant="outline"
-														onclick={() => {
-															specContent = null;
-															editedSpecContent =
-																"";
-															planResponse = null;
-															isEditingSpec = false;
-														}}
-													>
-														Discard
-													</Button>
-													<Button
-														onclick={handleExecutePlan}
-														disabled={isExecutingPlan ||
-															isRunning}
-													>
-														{#if isExecutingPlan}
-															<Loader2
-																class="h-4 w-4 animate-spin mr-2"
-															/>
-														{:else}
-															<Play
-																class="h-4 w-4 mr-2"
-															/>
-														{/if}
-														Approve & Execute
-													</Button>
-												</div>
-											</div>
-										</div>
-									</div>
-								</div>
-							</div>
-						{/if}
-
-						<!-- Agent Mesh Grid -->
-						{#if !isPlanMode}
-							<MeshGrid
-								agents={allAgents}
-								selectedId={agentRegistry.selectedAgentId}
-								onSelect={(id) => agentRegistry.selectAgent(id)}
-								projectId={activeProjectId}
-								onPause={handlePauseAgent}
-								onResume={handleResumeAgent}
-								onDirect={handleDirectAgent}
-							/>
-						{/if}
-
-						<!-- Download -->
-						{#if downloadReady && downloadData}
-							<DownloadButtons
-								projectName={downloadData.project_name}
-								projectId={downloadData.project_id}
-								zipUrl={downloadData.zip_url}
-								downloadUrl={downloadData.download_url}
-							/>
-						{/if}
-					</div>
-				</ScrollArea>
-
-				<!-- Question Card — shown when an agent calls ask_user() -->
-				{#if pendingQuestion}
-					<div class="mx-4 mb-3 shrink-0 flex justify-center">
-						<div class="w-full max-w-3xl rounded-2xl border border-white/50 bg-white/40 backdrop-blur-xl shadow-lg p-5">
-							<p class="text-sm font-semibold text-foreground mb-3">
-								The agent needs a few answers to continue:
-							</p>
-							<div class="flex flex-col gap-3">
-								{#each pendingQuestion.questions as question, i}
-									<div class="flex flex-col gap-1">
-										<label class="text-sm text-muted-foreground" for={`agent-question-${i}`}>{question}</label>
-										<Input
-											id={`agent-question-${i}`}
-											value={questionAnswers[i]}
-											oninput={(e) => { questionAnswers[i] = e.currentTarget.value; }}
-											placeholder="Your answer…"
-											class="h-10 border border-white/60 bg-white/60 backdrop-blur-sm rounded-xl px-3 text-sm focus-visible:ring-1 focus-visible:ring-primary/40"
-										/>
-									</div>
-								{/each}
-							</div>
-							<div class="mt-4 flex justify-end">
-								<Button
-									onclick={submitAnswers}
-									disabled={isSubmittingAnswers || questionAnswers.some((a) => !a.trim())}
-									class="rounded-xl px-5 h-9 text-sm"
-								>
-									{#if isSubmittingAnswers}
-										<Loader2 class="h-4 w-4 animate-spin mr-2" />
-									{/if}
-									Submit Answers
-								</Button>
-							</div>
-						</div>
-					</div>
-				{/if}
-
-				<!-- Input Area -->
-				<div class="mt-4 mb-8 px-4 shrink-0 flex justify-center">
-					<form
-						class="flex w-full max-w-3xl items-center gap-2 rounded-[2.5rem] border {isPlanMode
-							? 'border-primary/40 bg-primary/5'
-							: 'border-white/60 bg-white/60'} shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl p-2.5 transition-all {isPlanMode
-							? 'focus-within:bg-primary/10'
-							: 'focus-within:bg-white/80'} focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.1)]"
-						onsubmit={(e: SubmitEvent) => {
-							e.preventDefault();
-							handleSubmit();
-						}}
-					>
-						<div class="relative flex-1 flex items-center">
-							<Input
-								bind:value={inputValue}
-								placeholder={activeProjectId
-									? "Ask for a modification... (e.g., Add Stripe billing and an admin dashboard)"
-									: "Describe your project... (e.g., Build a task manager with Spring Boot and Svelte)"}
-								disabled={isRunning}
-								class="h-12 w-full border-0 bg-transparent px-5 text-[15px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 placeholder:text-muted-foreground/50 text-foreground"
-							/>
-							{#if inputValue}
-								<button
-									type="button"
-									class="absolute right-3 text-muted-foreground/40 hover:text-muted-foreground transition-colors p-1"
-									onclick={() => (inputValue = "")}
-								>
-									<span class="text-lg leading-none"
-										>&times;</span
-									>
-								</button>
-							{/if}
-						</div>
-						<Button
-							type="submit"
-							disabled={isRunning || !inputValue.trim()}
-							class="h-12 w-12 rounded-full p-0 shrink-0 bg-primary hover:bg-primary/90 text-primary-foreground shadow-[0_0_15px_rgba(var(--primary),0.3)] transition-all duration-300 hover:scale-105 disabled:opacity-50 disabled:hover:scale-100"
-						>
-							{#if isRunning}
-								<Loader2 class="h-5 w-5 animate-spin" />
-							{:else if isPlanMode}
-								<Map class="h-5 w-5 ml-0.5" />
-							{:else}
-								<Send class="h-5 w-5 ml-0.5" />
-							{/if}
-						</Button>
-				</form>
-					{#if planResponse && !specContent && !isPlanMode}
-						<div
-							class="mt-3 flex items-center gap-2 rounded-full bg-primary/10 border border-primary/30 px-4 py-2 text-[12px] font-medium text-primary"
-						>
-							<Loader2 class="h-4 w-4 animate-spin" />
-							{planResponse}
-						</div>
-					{/if}
-				</div>
-			</main>
-
-			<!-- Right: Agent Detail Panel -->
-		{#if selectedAgent && !isPlanMode}
-			<aside class="w-[470px] shrink-0 animate-fade-in">
-				<AgentDetail
-					agent={selectedAgent}
-					onClose={() => agentRegistry.selectAgent(null)}
-				/>
-				</aside>
-			{/if}
-
-			<!-- Version History Panel -->
-			{#if showVersionHistory && activeProjectId}
-				<aside
-					class="h-full min-h-0 w-[520px] shrink-0 animate-fade-in px-4 py-4"
-				>
-					<VersionHistory
-						projectId={activeProjectId}
-						onClose={() => (showVersionHistory = false)}
-						onRestore={handleVersionRestore}
-					/>
-				</aside>
-			{/if}
-
-			<!-- Code View Panel -->
-			{#if !isCodeViewCollapsed && activeProjectId}
-				<aside
-					class="w-[920px] max-w-[calc(100vw-2rem)] shrink-0 animate-fade-in px-4 py-4"
-				>
-					<CodeView
-						files={workspaceFiles}
-						projectId={activeProjectId}
-						collapsed={isCodeViewCollapsed}
-						onToggleCollapse={toggleCodeView}
-						{lastWrittenFile}
-					/>
-				</aside>
-			{/if}
 		</div>
 	</div>
-</div>
+</section>
+
+<!-- ── LOGO STRIP ────────────────────────────────────────── -->
+<section class="logos">
+	<div class="logos-inner">
+		<span class="label">Trusted by builders at</span>
+		<span class="logo-word">Modular</span>
+		<span class="logo-word mono">Linear/AI</span>
+		<span class="logo-word">Notion Labs</span>
+		<span class="logo-word mono">Vercel</span>
+		<span class="logo-word">Stripe Atlas</span>
+		<span class="logo-word mono">/dev/agents</span>
+	</div>
+</section>
+
+<!-- ── HOW (IDE preview) ─────────────────────────────────── -->
+<section class="section" id="how">
+	<div class="container">
+		<div class="sec-head">
+			<div>
+				<span class="eyebrow">A ── How Chorus works</span>
+				<h2 class="h-section" style="margin-top:16px">A live mesh,<br/>not a chat window.</h2>
+			</div>
+			<p class="right">Watch agents claim work, write files, and resolve conflicts in real time. Every keystroke is replayable — Chorus checkpoints state across the whole swarm so you can rewind, fork, and direct any single agent without stopping the rest.</p>
+		</div>
+
+		<div class="ide" data-screen-label="Landing — IDE preview">
+			<div class="ide-bar">
+				<span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+				<span style="margin-left:12px">~/projects/inbox-zero · main · 6 agents active</span>
+				<span style="margin-left:auto; color: var(--violet-2);">●  swarm running</span>
+			</div>
+			<div class="ide-body">
+				<div class="ide-tree">
+					<div class="group">backend/</div>
+					<ul>
+						<li>pom.xml</li>
+						<li class="active">UserController.java</li>
+						<li>AuthService.java</li>
+						<li>application.yml</li>
+					</ul>
+					<div class="group">frontend/</div>
+					<ul>
+						<li>+page.svelte</li>
+						<li>login/+page.svelte</li>
+						<li>app.css</li>
+					</ul>
+					<div class="group">infra/</div>
+					<ul>
+						<li>Dockerfile</li>
+						<li>docker-compose.yml</li>
+					</ul>
+				</div>
+				<div class="ide-code">
+					<div><span class="ln">1</span><span class="cm">// Generated by backend_agent · 12:04:31</span></div>
+					<div><span class="ln">2</span><span class="kw">@RestController</span></div>
+					<div><span class="ln">3</span><span class="kw">@RequestMapping</span>(<span class="st">"/api/v1/users"</span>)</div>
+					<div><span class="ln">4</span><span class="kw">public class</span> <span class="fn">UserController</span> &#123;</div>
+					<div><span class="ln">5</span>&nbsp;&nbsp;<span class="kw">private final</span> UserService service;</div>
+					<div><span class="ln">6</span></div>
+					<div><span class="ln">7</span>&nbsp;&nbsp;<span class="kw">@PostMapping</span>(<span class="st">"/login"</span>)</div>
+					<div><span class="ln">8</span>&nbsp;&nbsp;<span class="kw">public</span> ResponseEntity&lt;TokenDto&gt; <span class="fn">login</span>(</div>
+					<div><span class="ln">9</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">@Valid @RequestBody</span> LoginRequest req) &#123;</div>
+					<div><span class="ln">10</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">return</span> ResponseEntity.ok(service.<span class="fn">authenticate</span>(req));</div>
+					<div><span class="ln">11</span>&nbsp;&nbsp;&#125;</div>
+					<div><span class="ln">12</span>&#125;</div>
+					<div><span class="ln">13</span></div>
+					<div><span class="ln">14</span><span class="cm">// ◌ frontend_agent claimed: login/+page.svelte</span></div>
+					<div><span class="ln">15</span><span class="cm">// ◌ devops_agent claimed: Dockerfile</span></div>
+				</div>
+				<div class="ide-side">
+					<h6>Active swarm · 6</h6>
+					<div class="ide-agent run"><span class="av" style="background:linear-gradient(135deg,#a78bfa,#7c3aed)">R</span><span class="name">root_dep</span><span class="stat">writing</span></div>
+					<div class="ide-agent run"><span class="av" style="background:linear-gradient(135deg,#22d3ee,#0891b2)">B</span><span class="name">backend</span><span class="stat">writing</span></div>
+					<div class="ide-agent run"><span class="av" style="background:linear-gradient(135deg,#f472b6,#db2777)">F</span><span class="name">frontend</span><span class="stat">writing</span></div>
+					<div class="ide-agent idle"><span class="av" style="background:linear-gradient(135deg,#fbbf24,#d97706)">D</span><span class="name">devops</span><span class="stat">queued</span></div>
+					<div class="ide-agent done"><span class="av" style="background:linear-gradient(135deg,#34d399,#059669)">P</span><span class="name">packager</span><span class="stat">ready</span></div>
+					<div class="ide-agent run"><span class="av" style="background:linear-gradient(135deg,#94a3b8,#475569)">Q</span><span class="name">qa</span><span class="stat">testing</span></div>
+					<h6 style="margin-top:18px">Blackboard</h6>
+					<div style="font-size:11px; line-height:1.7; color: rgba(255,255,255,0.55);">
+						<div>↳ <span style="color:white">12,481</span> tokens cached</div>
+						<div>↳ <span style="color:white">37</span> files written</div>
+						<div>↳ <span style="color:white">0</span> conflicts</div>
+						<div>↳ checkpoint #8 · 2s ago</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+
+<!-- ── STATS ─────────────────────────────────────────────── -->
+<section class="section-tight">
+	<div class="container">
+		<div class="stats" data-screen-label="Landing — Stats">
+			<div class="stat"><div class="num">94<span style="font-size:32px">s</span></div><div class="lab">Median build · simple app</div></div>
+			<div class="stat"><div class="num">6×</div><div class="lab">Faster than supervisor agents</div></div>
+			<div class="stat"><div class="num">196k</div><div class="lab">Token context per agent</div></div>
+			<div class="stat"><div class="num">0</div><div class="lab">Bottleneck nodes</div></div>
+		</div>
+	</div>
+</section>
+
+<!-- ── FEATURES ──────────────────────────────────────────── -->
+<section class="section">
+	<div class="container">
+		<div class="sec-head">
+			<div>
+				<span class="eyebrow">B ── Why a swarm</span>
+				<h2 class="h-section" style="margin-top:16px">Decentralized<br/>by design.</h2>
+			</div>
+			<p class="right">Most "AI coding" tools rely on a single supervisor that becomes the bottleneck the moment your project gets interesting. Chorus runs peers — like an ant colony — that self-organize, vote, and recover from each other's failures.</p>
+		</div>
+
+		<div class="features">
+			<article class="feat wide">
+				<div class="icon-tile">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2 L22 8 L22 16 L12 22 L2 16 L2 8 Z"/><path d="M12 8 L17 11 L17 13 L12 16 L7 13 L7 11 Z" fill="currentColor"/></svg>
+				</div>
+				<h3>True peer-to-peer mesh</h3>
+				<p>Agents communicate via a shared blackboard (Redis pub/sub) and dynamically hand off work to whichever peer is least busy. No central controller. No single point of failure.</p>
+				<div class="visual" style="height: 120px; border-top: 1px solid var(--line); margin: 0 -28px -28px; padding: 16px 28px; background: var(--paper-1); display:flex; align-items:center; gap: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-4);">
+					<span style="color:var(--violet-d)">root</span> <span>↔</span>
+					<span style="color:var(--cyan-d)">backend</span> <span>↔</span>
+					<span style="color:var(--violet-d)">frontend</span>
+					<span style="margin-left:auto; padding: 4px 10px; border-radius: 999px; background: var(--ink-0); color: white; font-size: 10px; letter-spacing: 0.12em;">GOSSIP</span>
+				</div>
+			</article>
+
+			<article class="feat">
+				<div class="icon-tile" style="background: oklch(70% 0.18 295)">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M3 12 L9 6 L13 10 L21 2"/><path d="M14 2 L21 2 L21 9"/></svg>
+				</div>
+				<h3>Plan, then execute</h3>
+				<p>Plan Mode generates a SPEC.md with diagrams. Edit it inline. Approve. The swarm builds exactly what you signed off on.</p>
+			</article>
+
+			<article class="feat">
+				<div class="icon-tile" style="background: oklch(80% 0.13 220); color: var(--ink-0)">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7 L21 7 M3 12 L21 12 M3 17 L21 17"/><circle cx="6" cy="7" r="2" fill="currentColor"/><circle cx="14" cy="12" r="2" fill="currentColor"/><circle cx="9" cy="17" r="2" fill="currentColor"/></svg>
+				</div>
+				<h3>Time-travel checkpoints</h3>
+				<p>Every file write is a checkpoint. Rewind the whole swarm to any moment and fork a new branch from there.</p>
+			</article>
+
+			<article class="feat">
+				<div class="icon-tile" style="background: oklch(82% 0.13 75); color: var(--ink-0)">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v6M12 17v6M4.22 4.22l4.24 4.24M15.54 15.54l4.24 4.24M1 12h6M17 12h6M4.22 19.78l4.24-4.24M15.54 8.46l4.24-4.24"/></svg>
+				</div>
+				<h3>Direct any agent</h3>
+				<p>Pause, resume, or whisper a directive to a single agent without halting the rest of the swarm.</p>
+			</article>
+
+			<article class="feat">
+				<div class="icon-tile" style="background: var(--ink-0)">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M8 12 L11 15 L16 9"/></svg>
+				</div>
+				<h3>Sandbox-first execution</h3>
+				<p>Seatbelt on macOS, bubblewrap on Linux. <span style="color: var(--ink-1)">100ms cold start</span>, no Docker daemon required.</p>
+			</article>
+
+			<article class="feat">
+				<div class="icon-tile" style="background: oklch(74% 0.16 18)">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 12a9 9 0 11-6.2-8.55"/><path d="M21 4v5h-5"/></svg>
+				</div>
+				<h3>RAG-grounded code</h3>
+				<p>pgvector-backed knowledge base means agents cite real docs, not hallucinated APIs.</p>
+			</article>
+
+			<article class="feat full">
+				<div style="display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 32px; height: 100%; align-items: center;">
+					<div style="display: flex; flex-direction: column; gap: 14px;">
+						<div class="icon-tile">
+							<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 4h16v6H4z M4 14h16v6H4z"/><circle cx="8" cy="7" r="1" fill="currentColor"/><circle cx="8" cy="17" r="1" fill="currentColor"/></svg>
+						</div>
+						<h3 style="font-size: 28px; max-width: 18ch;">Ship a ZIP. Or a running container. Or both.</h3>
+						<p>Every Chorus project graduates with a verified ZIP archive and a built Docker image. The PackagerAgent runs last, verifies every file checksum, and produces both deliverables in parallel.</p>
+						<div style="display:flex; gap: 12px; margin-top: 12px;">
+							<span class="pill"><span class="dot" style="background: var(--cyan); box-shadow: 0 0 8px var(--cyan)"></span>project.zip · 4.2MB</span>
+							<span class="pill"><span class="dot" style="background: oklch(75% 0.16 150); box-shadow: 0 0 8px oklch(75% 0.16 150)"></span>chorus/inbox-zero:latest</span>
+						</div>
+					</div>
+					<div style="font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-1); background: var(--ink-0); color: rgba(255,255,255,0.85); border-radius: 16px; padding: 20px; line-height: 1.8;">
+						<div style="color: rgba(255,255,255,0.45)">$ chorus run inbox-zero</div>
+						<div>↳ <span style="color: var(--violet-2)">root_dep</span>     wrote 12 files</div>
+						<div>↳ <span style="color: var(--cyan)">backend</span>      wrote 28 files</div>
+						<div>↳ <span style="color: oklch(78% 0.13 18)">frontend</span>     wrote 19 files</div>
+						<div>↳ <span style="color: oklch(82% 0.13 75)">devops</span>       wrote  4 files</div>
+						<div>↳ <span style="color: oklch(75% 0.16 150)">packager</span>     verified ✓</div>
+						<div style="margin-top: 8px; color: white;">→ ready in 1m 47s</div>
+					</div>
+				</div>
+			</article>
+		</div>
+	</div>
+</section>
+
+<!-- ── 4 STEPS ───────────────────────────────────────────── -->
+<section class="section-tight">
+	<div class="container">
+		<div class="sec-head">
+			<div>
+				<span class="eyebrow">C ── The flow</span>
+				<h2 class="h-section" style="margin-top: 16px">Four steps,<br/>one outcome.</h2>
+			</div>
+			<p class="right">From a one-line idea to a production codebase you can clone, run, and extend.</p>
+		</div>
+		<div class="steps">
+			<div class="step"><span class="num">01 / DESCRIBE</span><h4>Tell Chorus what to build</h4><p>"A task manager with JWT auth, Postgres, and an admin dashboard." That's enough.</p></div>
+			<div class="step"><span class="num">02 / PLAN</span><h4>Review the SPEC.md</h4><p>Agents draft an architecture diagram, schema, and module list. Edit anything.</p></div>
+			<div class="step"><span class="num">03 / BUILD</span><h4>Watch the swarm work</h4><p>Six agents claim files in parallel. Pause, fork, or whisper directives at any moment.</p></div>
+			<div class="step"><span class="num">04 / SHIP</span><h4>Download or deploy</h4><p>ZIP archive + Docker image, both verified. Or push to GitHub with one click.</p></div>
+		</div>
+	</div>
+</section>
+
+<!-- ── QUOTE ─────────────────────────────────────────────── -->
+<section class="section">
+	<div class="container container-narrow" style="text-align: left;">
+		<span class="eyebrow">D ── Field report</span>
+		<blockquote class="q" style="margin-top: 24px;">
+			"We replaced a four-person bootstrapping squad with a Chorus pipeline. New internal tools now ship the same day they're requested — and the code is <em style="color: var(--violet-d);">cleaner than what we wrote by hand.</em>"
+		</blockquote>
+		<div class="q-cite">
+			<div class="av"></div>
+			<div class="who">Asha Bekele, Staff Engineer<span>Modular · Internal Tools</span></div>
+		</div>
+	</div>
+</section>
+
+<!-- ── PRICING TEASER ────────────────────────────────────── -->
+<section class="section-tight">
+	<div class="container">
+		<div class="sec-head">
+			<div>
+				<span class="eyebrow">E ── Pricing</span>
+				<h2 class="h-section" style="margin-top: 16px">Simple plans.<br/>Pay for what the swarm builds.</h2>
+			</div>
+			<p class="right">All tiers include the full agent mesh, plan mode, checkpoints, and sandbox execution. You only pay more for parallelism and project capacity. <a href="/pricing" style="color: var(--ink-1); text-decoration: underline; text-underline-offset: 4px;">Compare every plan →</a></p>
+		</div>
+
+		<div class="price-teaser" data-screen-label="Landing — Pricing teaser">
+			<div class="price-card">
+				<span class="tier">Solo</span>
+				<div class="amt">$0<small> /month</small></div>
+				<p style="margin:0; color: var(--ink-4); font-size: 14px;">For tinkering and one-off scaffolds.</p>
+				<ul>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>3 projects · 2 parallel agents</li>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>ZIP downloads</li>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Community support</li>
+				</ul>
+				<a href="/register" class="btn btn-ghost" style="margin-top: auto;">Start free</a>
+			</div>
+			<div class="price-card feat-tier">
+				<div style="display: flex; justify-content: space-between; align-items: center;">
+					<span class="tier">Studio</span>
+					<span class="pill on-dark" style="font-size: 10px;">Most popular</span>
+				</div>
+				<div class="amt">$32<small> /month</small></div>
+				<p style="margin:0; font-size: 14px;">For solo devs shipping real products.</p>
+				<ul>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Unlimited projects · 6 parallel agents</li>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Docker image + GitHub push</li>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Time-travel checkpoints</li>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Priority MiniMax tokens</li>
+				</ul>
+				<a href="/register" class="btn btn-luminous" style="margin-top: auto;">Start 14-day trial</a>
+			</div>
+			<div class="price-card">
+				<span class="tier">Swarm</span>
+				<div class="amt">$120<small> /seat /month</small></div>
+				<p style="margin:0; color: var(--ink-4); font-size: 14px;">For teams that ship together.</p>
+				<ul>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>16 parallel agents · multi-swarm</li>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>SAML SSO · audit log</li>
+					<li><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>Self-hosted sandbox option</li>
+				</ul>
+				<a href="/pricing" class="btn btn-ghost" style="margin-top: auto;">Talk to sales</a>
+			</div>
+		</div>
+	</div>
+</section>
+
+<!-- ── BIG CTA ───────────────────────────────────────────── -->
+<section class="section">
+	<div class="container">
+		<div class="cta-band mesh-dark drift grain" data-screen-label="Landing — CTA">
+			<div style="position: relative; z-index: 2; max-width: 780px;">
+				<span class="eyebrow on-dark">Ready when you are</span>
+				<h2 class="h-section" style="color: white; margin: 16px 0 0;">The next thing<br/>you ship will be<br/><em style="font-style: italic; background: linear-gradient(90deg, var(--violet-2), var(--cyan)); -webkit-background-clip: text; background-clip: text; color: transparent;">a sentence away.</em></h2>
+				<p>Free forever for hobby projects. Two minutes to your first build. No credit card.</p>
+				<div style="display: flex; gap: 12px; flex-wrap: wrap;">
+					<a href="/register" class="btn btn-luminous btn-lg">
+						Create your account
+						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+					</a>
+					<a href="/pricing" class="btn btn-on-dark-ghost btn-lg">See pricing</a>
+				</div>
+			</div>
+		</div>
+	</div>
+</section>
+
+<!-- ── FOOTER ────────────────────────────────────────────── -->
+<footer style="background: var(--paper-1);">
+	<div class="container">
+		<div class="footer">
+			<div>
+				<div class="foot-brand" style="color: var(--ink-1); font-size: 16px;">
+					<span class="hex-mark"><svg viewBox="0 0 32 32" fill="none">
+						<path d="M16 2 L28 9 L28 23 L16 30 L4 23 L4 9 Z" fill="url(#g2)" stroke="rgba(0,0,0,0.1)" stroke-width="1"/>
+						<path d="M16 9 L22 12.5 L22 19.5 L16 23 L10 19.5 L10 12.5 Z" fill="white"/>
+						<defs><linearGradient id="g2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset="1" stop-color="#7c3aed"/></linearGradient></defs>
+					</svg></span>
+					Chorus
+				</div>
+				<p style="margin: 16px 0 0; max-width: 36ch; font-size: 13px;">Decentralized AI agent swarm for production code generation. Built in collaboration with the open swarm research community.</p>
+				<div style="display: flex; gap: 8px; margin-top: 24px;">
+					<a href="#" style="width: 36px; height: 36px; border-radius: 12px; border: 1px solid var(--line); display: grid; place-items: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2.1c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.3 1.2-3.2-.1-.3-.5-1.5.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.2 2.9.1 3.2.8.9 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .3z"/></svg></a>
+					<a href="#" style="width: 36px; height: 36px; border-radius: 12px; border: 1px solid var(--line); display: grid; place-items: center;"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M22 5.9a8.2 8.2 0 01-2.4.7 4.1 4.1 0 001.8-2.3 8.3 8.3 0 01-2.6 1 4.1 4.1 0 00-7 3.7A11.7 11.7 0 013 4.7a4.1 4.1 0 001.3 5.5 4.1 4.1 0 01-1.9-.5v.1a4.1 4.1 0 003.3 4 4.1 4.1 0 01-1.9.1 4.1 4.1 0 003.8 2.9A8.2 8.2 0 012 18.5a11.6 11.6 0 006.3 1.8c7.5 0 11.6-6.2 11.6-11.6v-.5A8.3 8.3 0 0022 5.9z"/></svg></a>
+				</div>
+			</div>
+			<div>
+				<h5>Product</h5>
+				<ul>
+					<li><a href="/">Overview</a></li>
+					<li><a href="/pricing">Pricing</a></li>
+					<li><a href="#how">How it works</a></li>
+					<li><a href="#">Changelog</a></li>
+				</ul>
+			</div>
+			<div>
+				<h5>Resources</h5>
+				<ul>
+					<li><a href="#">Documentation</a></li>
+					<li><a href="#">Agent SDK</a></li>
+					<li><a href="#">Templates</a></li>
+					<li><a href="#">Status</a></li>
+				</ul>
+			</div>
+			<div>
+				<h5>Company</h5>
+				<ul>
+					<li><a href="#">About</a></li>
+					<li><a href="#">Blog</a></li>
+					<li><a href="#">Careers</a></li>
+					<li><a href="#">Contact</a></li>
+				</ul>
+			</div>
+		</div>
+		<div style="display: flex; justify-content: space-between; padding: 24px 32px 48px; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; color: var(--ink-5); border-top: 1px solid var(--line); margin-top: 24px;">
+			<span>© 2026 Chorus Labs · MADE WITH SWARMS</span>
+			<span>v2.0.4 · ALL SYSTEMS NOMINAL</span>
+		</div>
+	</div>
+</footer>

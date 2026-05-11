@@ -340,6 +340,12 @@ class ClaimStore:
                 continue
         return claims
 
+    async def get_valid_claims_by_type(self, project_id: str, claim_type: str) -> list[dict[str, Any]]:
+        """Return all VALID claims for a given type."""
+        from .claims import ClaimStatus
+        all_claims = await self.get_claims_by_type(project_id, claim_type)
+        return [c for c in all_claims if c.get("status") == ClaimStatus.VALID.value]
+
     async def _client(self) -> RedisLike:
         if self._redis is None:
             await self.connect()

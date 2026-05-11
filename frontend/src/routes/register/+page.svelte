@@ -1,0 +1,473 @@
+<svelte:head>
+	<title>Create account — Chorus</title>
+	<style>
+		body { background: var(--paper-1); }
+
+		.auth-shell {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			min-height: 100vh;
+		}
+		@media (max-width: 960px) {
+			.auth-shell { grid-template-columns: 1fr; }
+			.auth-pane-left { display: none; }
+		}
+
+		/* LEFT — testimonials & social proof */
+		.auth-pane-left {
+			position: relative;
+			background: var(--ink-0);
+			color: white;
+			padding: 36px;
+			display: flex; flex-direction: column;
+			overflow: hidden;
+			isolation: isolate;
+		}
+		.auth-pane-left::before {
+			content: ""; position: absolute; inset: 0;
+			background:
+				radial-gradient(50% 60% at 80% 100%, oklch(70% 0.20 295 / 0.30), transparent 60%),
+				radial-gradient(60% 50% at 10% 10%, oklch(75% 0.15 220 / 0.18), transparent 65%);
+			z-index: -1;
+		}
+
+		.brand-row {
+			display: flex; align-items: center; gap: 10px;
+			color: white; font-weight: 600; font-size: 17px;
+		}
+		.brand-row .hex-mark svg path:first-child { fill: white; }
+		.brand-row .hex-mark svg path:nth-child(2) { fill: var(--ink-0); }
+
+		.pane-content { margin-top: 56px; max-width: 460px; }
+		.pane-content .eyebrow { color: var(--violet-2); }
+		.pane-content h2 {
+			font-family: var(--font-display);
+			font-weight: 400;
+			font-size: 56px; line-height: 1; letter-spacing: -0.02em;
+			margin: 16px 0 24px; color: white;
+		}
+		.pane-content h2 em { font-style: italic; color: oklch(78% 0.16 295); }
+
+		.stats-strip {
+			display: grid; grid-template-columns: repeat(3, 1fr);
+			margin-top: 36px;
+			gap: 0;
+			border-top: 1px solid rgba(255,255,255,0.08);
+			border-bottom: 1px solid rgba(255,255,255,0.08);
+		}
+		.stat-cell { padding: 20px 8px; border-right: 1px solid rgba(255,255,255,0.08); }
+		.stat-cell:last-child { border-right: 0; }
+		.stat-cell .n {
+			font-family: var(--font-display);
+			font-size: 36px; line-height: 1; letter-spacing: -0.02em;
+		}
+		.stat-cell .n em { font-style: italic; color: oklch(78% 0.16 295); }
+		.stat-cell .l { font-family: var(--font-mono); font-size: 10.5px;
+			letter-spacing: 0.10em; color: rgba(255,255,255,0.45); margin-top: 6px; text-transform: uppercase; }
+
+		.quote {
+			margin-top: 36px;
+			background: rgba(255,255,255,0.03);
+			border: 1px solid rgba(255,255,255,0.08);
+			border-radius: 20px;
+			padding: 24px;
+			backdrop-filter: blur(20px);
+		}
+		.quote .q-mark {
+			font-family: var(--font-display);
+			font-size: 56px; line-height: 0.5;
+			color: var(--violet-2);
+			height: 24px; display: block;
+		}
+		.quote p {
+			font-size: 16px; line-height: 1.55; color: rgba(255,255,255,0.85);
+			margin: 18px 0 18px;
+			letter-spacing: -0.005em;
+		}
+		.quote .author {
+			display: flex; align-items: center; gap: 12px;
+			font-size: 13px; color: rgba(255,255,255,0.7);
+		}
+		.quote .author .av {
+			width: 36px; height: 36px; border-radius: 50%;
+			background:
+				conic-gradient(from 130deg, oklch(70% 0.18 295), oklch(75% 0.15 220), oklch(78% 0.18 30), oklch(70% 0.18 295));
+			border: 1px solid rgba(255,255,255,0.10);
+		}
+		.quote .author strong { color: white; font-weight: 500; }
+		.quote .author span { color: rgba(255,255,255,0.5); }
+
+		.pane-footer {
+			margin-top: auto;
+			padding-top: 32px;
+			display: flex; align-items: center; justify-content: space-between;
+			font-family: var(--font-mono); font-size: 11px;
+			letter-spacing: 0.08em;
+			color: rgba(255,255,255,0.40);
+		}
+		.pane-footer .pair {
+			display: flex; gap: 16px;
+		}
+
+		/* RIGHT — Form */
+		.auth-pane-right {
+			background: var(--paper-1);
+			padding: 36px;
+			display: flex; flex-direction: column;
+			overflow-y: auto;
+		}
+		.pane-r-top {
+			display: flex; justify-content: flex-end; gap: 10px;
+			align-items: center; font-size: 13px; color: var(--ink-4);
+		}
+
+		.form-card {
+			margin: auto; width: 100%; max-width: 460px; padding: 24px 0;
+		}
+		.form-card h1 {
+			font-family: var(--font-display);
+			font-weight: 400;
+			font-size: 44px; letter-spacing: -0.02em;
+			line-height: 1; margin: 0 0 12px;
+		}
+		.form-card .sub {
+			color: var(--ink-4); font-size: 14.5px; line-height: 1.5;
+			margin-bottom: 26px;
+		}
+
+		.oauth-row {
+			display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+			margin-bottom: 20px;
+		}
+		.oauth-btn {
+			display: flex; align-items: center; justify-content: center; gap: 8px;
+			border: 1px solid var(--line);
+			background: var(--paper-0);
+			border-radius: 14px;
+			padding: 12px 14px;
+			font-size: 13px; font-weight: 500;
+			color: var(--ink-1);
+			cursor: pointer;
+			transition: all 200ms ease;
+		}
+		.oauth-btn:hover { border-color: var(--ink-3); transform: translateY(-1px); box-shadow: var(--shadow-1); }
+		.oauth-btn svg { width: 17px; height: 17px; }
+
+		.divider {
+			display: flex; align-items: center; gap: 12px;
+			color: var(--ink-5);
+			font-family: var(--font-mono); font-size: 11px;
+			letter-spacing: 0.14em;
+			margin-bottom: 20px;
+		}
+		.divider::before, .divider::after {
+			content: ""; flex: 1; height: 1px; background: var(--line);
+		}
+
+		.row2 {
+			display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+		}
+
+		.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+		.field label { font-size: 12.5px; font-weight: 500; color: var(--ink-2); }
+		.field .hint { font-size: 11.5px; color: var(--ink-5); margin-top: 2px; }
+
+		.input-wrap { position: relative; display: flex; align-items: center; }
+		.input-wrap > svg.lead {
+			position: absolute; left: 14px; width: 16px; height: 16px;
+			color: var(--ink-5);
+		}
+		.input {
+			width: 100%; background: var(--paper-0);
+			border: 1px solid var(--line); border-radius: 14px;
+			padding: 13px 14px 13px 42px;
+			font-size: 14.5px; font-family: var(--font-sans);
+			color: var(--ink-0); transition: all 180ms ease;
+		}
+		.input::placeholder { color: var(--ink-5); }
+		.input:focus { outline: none; border-color: var(--violet); box-shadow: 0 0 0 4px oklch(70% 0.18 295 / 0.10); }
+		.input.has-trail { padding-right: 44px; }
+		.input-wrap > .trail {
+			position: absolute; right: 8px;
+			background: transparent; border: 0; padding: 6px;
+			color: var(--ink-5); cursor: pointer; border-radius: 8px;
+		}
+		.input-wrap > .trail:hover { color: var(--ink-1); background: var(--paper-1); }
+
+		/* password strength */
+		.strength {
+			display: grid; grid-template-columns: repeat(4, 1fr);
+			gap: 4px; margin-top: 8px;
+		}
+		.strength .seg { height: 3px; background: var(--paper-2); border-radius: 2px; transition: background 220ms ease; }
+		.strength.l1 .seg:nth-child(-n+1) { background: oklch(72% 0.18 25); }
+		.strength.l2 .seg:nth-child(-n+2) { background: oklch(78% 0.14 60); }
+		.strength.l3 .seg:nth-child(-n+3) { background: oklch(78% 0.14 140); }
+		.strength.l4 .seg { background: var(--violet); }
+		.strength-label {
+			font-family: var(--font-mono); font-size: 10.5px;
+			letter-spacing: 0.10em; color: var(--ink-5);
+			margin-top: 6px; display: flex; justify-content: space-between;
+		}
+		.strength-label strong { color: var(--ink-1); font-weight: 500; }
+
+		/* role pills */
+		.pill-grid {
+			display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+			margin-bottom: 18px;
+		}
+		.pill {
+			cursor: pointer;
+			padding: 10px 12px;
+			border: 1px solid var(--line);
+			background: var(--paper-0);
+			border-radius: 12px;
+			font-size: 12px; font-weight: 500;
+			color: var(--ink-2);
+			text-align: center;
+			transition: all 180ms ease;
+			display: flex; flex-direction: column; gap: 3px;
+		}
+		.pill .ico {
+			font-family: var(--font-mono); font-size: 10px;
+			color: var(--ink-5); letter-spacing: 0.10em;
+		}
+		.pill input { display: none; }
+		.pill:has(input:checked) {
+			border-color: var(--ink-0);
+			background: var(--ink-0); color: white;
+			box-shadow: 0 6px 18px rgba(20,18,32,0.14);
+		}
+		.pill:has(input:checked) .ico { color: var(--violet-2); }
+
+		.check-row {
+			display: flex; align-items: flex-start; gap: 10px;
+			font-size: 12.5px; color: var(--ink-3);
+			margin: 8px 0 18px;
+			cursor: pointer;
+			line-height: 1.5;
+		}
+		.check-row a { color: var(--ink-1); border-bottom: 1px solid var(--ink-3); }
+		.check-row input { display: none; }
+		.check-row .box {
+			flex-shrink: 0;
+			width: 18px; height: 18px;
+			border-radius: 6px;
+			border: 1.5px solid var(--line-strong);
+			background: var(--paper-0);
+			display: inline-flex; align-items: center; justify-content: center;
+			transition: all 160ms ease;
+			margin-top: 1px;
+		}
+		.check-row input:checked + .box { background: var(--ink-0); border-color: var(--ink-0); }
+		.check-row input:checked + .box::after { content: "✓"; color: white; font-size: 12px; font-weight: 700; }
+
+		.submit-btn {
+			width: 100%; padding: 14px 18px;
+			border-radius: 14px;
+			background: var(--ink-0); color: white; border: 0;
+			font-size: 14.5px; font-weight: 500;
+			cursor: pointer; transition: all 220ms ease;
+			box-shadow: 0 8px 22px rgba(124, 58, 237, 0.18), inset 0 1px 0 rgba(255,255,255,0.10);
+			display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+			position: relative; overflow: hidden;
+		}
+		.submit-btn::before {
+			content: ""; position: absolute; inset: 0;
+			background: linear-gradient(180deg, oklch(70% 0.18 295 / 0.20), transparent 60%);
+		}
+		.submit-btn:hover { transform: translateY(-1px); box-shadow: 0 14px 32px rgba(124, 58, 237, 0.30); }
+		.submit-btn span { position: relative; z-index: 1; }
+
+		.form-foot {
+			margin-top: 22px; color: var(--ink-4); font-size: 13px; text-align: center;
+		}
+		.form-foot a { color: var(--ink-0); font-weight: 500; border-bottom: 1px solid var(--ink-3); }
+	</style>
+</svelte:head>
+
+<div class="auth-shell" data-screen-label="Register — Auth shell">
+
+	<!-- LEFT -->
+	<aside class="auth-pane-left">
+		<div class="brand-row">
+			<span class="hex-mark"><svg viewBox="0 0 32 32" fill="none">
+				<path d="M16 2 L28 9 L28 23 L16 30 L4 23 L4 9 Z" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+				<path d="M16 9 L22 12.5 L22 19.5 L16 23 L10 19.5 L10 12.5 Z"/>
+			</svg></span>
+			Chorus
+		</div>
+
+		<div class="pane-content">
+			<span class="eyebrow on-dark">A ── 14-day free trial</span>
+			<h2>Six agents.<br/>One <em>conductor</em>.<br/>You.</h2>
+			<p style="color: rgba(255,255,255,0.65); font-size: 15px; line-height: 1.55; max-width: 38ch;">
+				Join thousands of teams shipping production code through the Chorus mesh. No credit card. No setup. Your first project is on us.
+			</p>
+
+			<div class="stats-strip">
+				<div class="stat-cell">
+					<div class="n"><em>2.4</em>M+</div>
+					<div class="l">Projects shipped</div>
+				</div>
+				<div class="stat-cell">
+					<div class="n">96<em>%</em></div>
+					<div class="l">Pass-on-first-build</div>
+				</div>
+				<div class="stat-cell">
+					<div class="n"><em>11</em>×</div>
+					<div class="l">Faster than solo</div>
+				</div>
+			</div>
+
+			<div class="quote">
+				<span class="q-mark">“</span>
+				<p>We replaced an entire spike-and-prototype phase with Chorus. The mesh ran QA against the backend and frontend in parallel — we got a deployable Spring Boot app in under thirteen minutes.</p>
+				<div class="author">
+					<span class="av"></span>
+					<div>
+						<strong>Asha Iqbal</strong> &nbsp; <span>Staff Engineer · Cordel</span>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="pane-footer">
+			<span>SOC 2 · TYPE II</span>
+			<div class="pair">
+				<span>GDPR</span><span>HIPAA-READY</span>
+			</div>
+		</div>
+	</aside>
+
+	<!-- RIGHT -->
+	<main class="auth-pane-right">
+		<div class="pane-r-top">
+			<span>Already have an account?</span>
+			<a href="/login" class="btn btn-ghost btn-sm">Sign in</a>
+		</div>
+
+		<div class="form-card">
+			<span class="eyebrow">B ── Create account</span>
+			<h1 style="margin-top: 12px;">Spin up your <em style="font-style: italic; color: var(--violet-d);">first swarm</em>.</h1>
+			<p class="sub">Free 14 days · no card required · close any time.</p>
+
+			<div class="oauth-row">
+				<button class="oauth-btn" type="button">
+					<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.5 12.27c0-.79-.07-1.54-.2-2.27H12v4.51h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.32z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.1c-.22-.66-.35-1.37-.35-2.1s.13-1.44.35-2.1V7.06H2.18A11 11 0 0 0 1 12c0 1.78.43 3.46 1.18 4.94l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
+					Sign up with Google
+				</button>
+				<button class="oauth-btn" type="button">
+					<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.79 23.4c.6.1.82-.26.82-.58v-2.16c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76-1.08-.74.08-.73.08-.73 1.2.08 1.83 1.23 1.83 1.23 1.06 1.82 2.79 1.3 3.47.99.1-.77.42-1.3.76-1.6-2.66-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.23-3.22-.13-.3-.54-1.52.11-3.16 0 0 1-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.28-1.55 3.29-1.23 3.29-1.23.65 1.64.24 2.86.12 3.16.77.84 1.23 1.91 1.23 3.22 0 4.62-2.81 5.62-5.49 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.69.83.58A12 12 0 0 0 12 .3"/></svg>
+					Sign up with GitHub
+				</button>
+			</div>
+
+			<div class="divider">OR · WITH EMAIL</div>
+
+			<form>
+				<div class="row2">
+					<div class="field">
+						<label for="fn">First name</label>
+						<div class="input-wrap">
+							<svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+							<input class="input" id="fn" placeholder="Asha" />
+						</div>
+					</div>
+					<div class="field">
+						<label for="ln">Last name</label>
+						<div class="input-wrap">
+							<svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+							<input class="input" id="ln" placeholder="Iqbal" />
+						</div>
+					</div>
+				</div>
+
+				<div class="field">
+					<label for="email">Work email</label>
+					<div class="input-wrap">
+						<svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+						<input class="input" type="email" id="email" placeholder="you@company.com" />
+					</div>
+				</div>
+
+				<div class="field">
+					<label for="pw">Password</label>
+					<div class="input-wrap">
+						<svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+						<input class="input has-trail" type="password" id="pw" placeholder="At least 12 characters" oninput={checkStrength} />
+						<button type="button" class="trail" aria-label="Show password" onclick={togglePw}>
+							<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+						</button>
+					</div>
+					<div class="strength" id="strength">
+						<div class="seg"></div><div class="seg"></div><div class="seg"></div><div class="seg"></div>
+					</div>
+					<div class="strength-label">
+						<span>STRENGTH</span>
+						<strong id="strLabel">— —</strong>
+					</div>
+				</div>
+
+				<div class="field">
+					<label>I'm primarily a…</label>
+					<div class="pill-grid">
+						<label class="pill">
+							<input type="radio" name="role" checked />
+							<span class="ico">01</span>
+							<span>Engineer</span>
+						</label>
+						<label class="pill">
+							<input type="radio" name="role" />
+							<span class="ico">02</span>
+							<span>Designer</span>
+						</label>
+						<label class="pill">
+							<input type="radio" name="role" />
+							<span class="ico">03</span>
+							<span>Founder / PM</span>
+						</label>
+					</div>
+				</div>
+
+				<label class="check-row">
+					<input type="checkbox" />
+					<span class="box"></span>
+					<span>I agree to the <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>. Send me product updates (no more than once a month — promise).</span>
+				</label>
+
+				<button class="submit-btn" type="submit">
+					<span>Create account &amp; spin up swarm</span>
+					<span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
+				</button>
+			</form>
+
+			<p class="form-foot">
+				Single sign-on for orgs · <a href="#">Use SAML SSO →</a>
+			</p>
+		</div>
+	</main>
+
+</div>
+
+<script lang="ts">
+	function togglePw() {
+		const i = document.getElementById('pw') as HTMLInputElement;
+		i.type = i.type === 'password' ? 'text' : 'password';
+	}
+	function checkStrength(e: Event) {
+		const v = (e.target as HTMLInputElement).value;
+		let lvl = 0;
+		if (v.length >= 8) lvl = 1;
+		if (v.length >= 12 && /\d/.test(v)) lvl = 2;
+		if (v.length >= 12 && /\d/.test(v) && /[A-Z]/.test(v)) lvl = 3;
+		if (v.length >= 14 && /\d/.test(v) && /[A-Z]/.test(v) && /[^a-zA-Z0-9]/.test(v)) lvl = 4;
+		const el = document.getElementById('strength');
+		if (!el) return;
+		el.classList.remove('l1','l2','l3','l4');
+		if (lvl > 0) el.classList.add('l' + lvl);
+		const labels = ['— —','WEAK','OKAY','STRONG','EXCELLENT'];
+		const lbl = document.getElementById('strLabel');
+		if (lbl) lbl.textContent = labels[lvl];
+	}
+</script>

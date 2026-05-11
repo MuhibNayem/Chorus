@@ -40,68 +40,6 @@
 		isExpanded: boolean;
 	}
 
-	interface FileVisual {
-		icon: typeof FileCode;
-		tone: string;
-		accent: string;
-	}
-
-	const EXACT_FILE_VISUALS: Record<string, FileVisual> = {
-		'pom.xml': { icon: Coffee, tone: 'text-red-500/90', accent: 'bg-red-500/10 ring-red-500/15' },
-		'build.gradle': { icon: Coffee, tone: 'text-red-500/90', accent: 'bg-red-500/10 ring-red-500/15' },
-		'build.gradle.kts': { icon: Coffee, tone: 'text-red-500/90', accent: 'bg-red-500/10 ring-red-500/15' },
-		'gradlew': { icon: Coffee, tone: 'text-red-500/90', accent: 'bg-red-500/10 ring-red-500/15' },
-		'dockerfile': { icon: FileTerminal, tone: 'text-orange-500/85', accent: 'bg-orange-500/10 ring-orange-500/15' },
-		'readme.md': { icon: FileText, tone: 'text-sky-500/85', accent: 'bg-sky-500/10 ring-sky-500/15' },
-		'changelog.md': { icon: ScrollText, tone: 'text-sky-500/85', accent: 'bg-sky-500/10 ring-sky-500/15' },
-		'package.json': { icon: FileCode, tone: 'text-amber-500/90', accent: 'bg-amber-500/10 ring-amber-500/15' },
-		'pnpm-lock.yaml': { icon: FileType, tone: 'text-violet-500/85', accent: 'bg-violet-500/10 ring-violet-500/15' },
-		'package-lock.json': { icon: FileType, tone: 'text-violet-500/85', accent: 'bg-violet-500/10 ring-violet-500/15' },
-		'yarn.lock': { icon: FileType, tone: 'text-violet-500/85', accent: 'bg-violet-500/10 ring-violet-500/15' },
-		'tsconfig.json': { icon: FileType, tone: 'text-blue-500/85', accent: 'bg-blue-500/10 ring-blue-500/15' },
-		'jsconfig.json': { icon: FileType, tone: 'text-blue-500/85', accent: 'bg-blue-500/10 ring-blue-500/15' },
-		'vite.config.ts': { icon: FileCode, tone: 'text-cyan-500/85', accent: 'bg-cyan-500/10 ring-cyan-500/15' },
-		'svelte.config.js': { icon: FileCode, tone: 'text-orange-500/85', accent: 'bg-orange-500/10 ring-orange-500/15' },
-		'tailwind.config.js': { icon: FileCode, tone: 'text-cyan-500/85', accent: 'bg-cyan-500/10 ring-cyan-500/15' },
-		'prettier.config.js': { icon: FileCode, tone: 'text-pink-500/85', accent: 'bg-pink-500/10 ring-pink-500/15' },
-		'eslint.config.js': { icon: FileCode, tone: 'text-emerald-500/85', accent: 'bg-emerald-500/10 ring-emerald-500/15' },
-		'postcss.config.js': { icon: FileCode, tone: 'text-fuchsia-500/85', accent: 'bg-fuchsia-500/10 ring-fuchsia-500/15' },
-		'favicon.svg': { icon: CodeXml, tone: 'text-cyan-500/90', accent: 'bg-cyan-500/10 ring-cyan-500/15' },
-		'favicon.png': { icon: Image, tone: 'text-emerald-500/90', accent: 'bg-emerald-500/10 ring-emerald-500/15' },
-		'.env': { icon: FileCog, tone: 'text-amber-500/90', accent: 'bg-amber-500/10 ring-amber-500/15' }
-	};
-
-	const EXTENSION_VISUALS: Record<string, FileVisual> = {
-		'js': { icon: FileCode, tone: 'text-yellow-500/90', accent: 'bg-yellow-500/10 ring-yellow-500/15' },
-		'mjs': { icon: FileCode, tone: 'text-yellow-500/90', accent: 'bg-yellow-500/10 ring-yellow-500/15' },
-		'cjs': { icon: FileCode, tone: 'text-yellow-500/90', accent: 'bg-yellow-500/10 ring-yellow-500/15' },
-		'ts': { icon: FileCode, tone: 'text-sky-500/90', accent: 'bg-sky-500/10 ring-sky-500/15' },
-		'tsx': { icon: FileCode, tone: 'text-sky-500/90', accent: 'bg-sky-500/10 ring-sky-500/15' },
-		'jsx': { icon: FileCode, tone: 'text-amber-500/90', accent: 'bg-amber-500/10 ring-amber-500/15' },
-		'json': { icon: FileCode, tone: 'text-zinc-500/90', accent: 'bg-zinc-500/10 ring-zinc-500/15' },
-		'yaml': { icon: FileType, tone: 'text-rose-500/90', accent: 'bg-rose-500/10 ring-rose-500/15' },
-		'yml': { icon: FileType, tone: 'text-rose-500/90', accent: 'bg-rose-500/10 ring-rose-500/15' },
-		'html': { icon: FileType, tone: 'text-orange-500/90', accent: 'bg-orange-500/10 ring-orange-500/15' },
-		'css': { icon: FileType, tone: 'text-cyan-500/90', accent: 'bg-cyan-500/10 ring-cyan-500/15' },
-		'scss': { icon: FileType, tone: 'text-pink-500/90', accent: 'bg-pink-500/10 ring-pink-500/15' },
-		'md': { icon: FileText, tone: 'text-sky-500/90', accent: 'bg-sky-500/10 ring-sky-500/15' },
-		'txt': { icon: FileText, tone: 'text-slate-500/90', accent: 'bg-slate-500/10 ring-slate-500/15' },
-		'java': { icon: Coffee, tone: 'text-red-500/90', accent: 'bg-red-500/10 ring-red-500/15' },
-		'kt': { icon: FileCode, tone: 'text-violet-500/90', accent: 'bg-violet-500/10 ring-violet-500/15' },
-		'kts': { icon: FileCode, tone: 'text-violet-500/90', accent: 'bg-violet-500/10 ring-violet-500/15' },
-		'py': { icon: FileCode, tone: 'text-blue-500/90', accent: 'bg-blue-500/10 ring-blue-500/15' },
-		'sh': { icon: FileTerminal, tone: 'text-emerald-500/90', accent: 'bg-emerald-500/10 ring-emerald-500/15' },
-		'bash': { icon: FileTerminal, tone: 'text-emerald-500/90', accent: 'bg-emerald-500/10 ring-emerald-500/15' },
-		'png': { icon: Image, tone: 'text-emerald-500/90', accent: 'bg-emerald-500/10 ring-emerald-500/15' },
-		'jpg': { icon: Image, tone: 'text-emerald-500/90', accent: 'bg-emerald-500/10 ring-emerald-500/15' },
-		'jpeg': { icon: Image, tone: 'text-emerald-500/90', accent: 'bg-emerald-500/10 ring-emerald-500/15' },
-		'gif': { icon: Image, tone: 'text-emerald-500/90', accent: 'bg-emerald-500/10 ring-emerald-500/15' },
-		'svg': { icon: CodeXml, tone: 'text-cyan-500/90', accent: 'bg-cyan-500/10 ring-cyan-500/15' },
-		'pdf': { icon: FileText, tone: 'text-rose-500/90', accent: 'bg-rose-500/10 ring-rose-500/15' },
-		'log': { icon: ScrollText, tone: 'text-slate-500/90', accent: 'bg-slate-500/10 ring-slate-500/15' },
-		'xml': { icon: CodeXml, tone: 'text-orange-500/90', accent: 'bg-orange-500/10 ring-orange-500/15' }
-	};
-
 	function toggleDir(path: string) {
 		if (expandedDirs.has(path)) {
 			expandedDirs.delete(path);
@@ -111,21 +49,79 @@
 		expandedDirs = new Set(expandedDirs);
 	}
 
-	function getFileIcon(node: FileNode) {
-		if (node.type === 'directory') {
-			return expandedDirs.has(node.path) ? FolderOpen : Folder;
-		}
-		return getFileVisual(node).icon;
+	interface FileVisual {
+		icon: typeof FileCode;
+		tone: string;
+		bg: string;
 	}
 
-	function getFileVisual(node: FileNode): FileVisual {
-		const lowerName = node.name.toLowerCase();
-		const exactMatch = EXACT_FILE_VISUALS[lowerName];
-		if (exactMatch) return exactMatch;
+	const EXACT_VISUALS: Record<string, FileVisual> = {
+		'pom.xml': { icon: Coffee, tone: 'oklch(70% 0.16 18)', bg: 'oklch(70% 0.16 18 / 0.12)' },
+		'build.gradle': { icon: Coffee, tone: 'oklch(70% 0.16 18)', bg: 'oklch(70% 0.16 18 / 0.12)' },
+		'build.gradle.kts': { icon: Coffee, tone: 'oklch(70% 0.16 18)', bg: 'oklch(70% 0.16 18 / 0.12)' },
+		'gradlew': { icon: Coffee, tone: 'oklch(70% 0.16 18)', bg: 'oklch(70% 0.16 18 / 0.12)' },
+		'dockerfile': { icon: FileTerminal, tone: 'oklch(80% 0.14 75)', bg: 'oklch(80% 0.14 75 / 0.12)' },
+		'readme.md': { icon: FileText, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		'changelog.md': { icon: ScrollText, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		'package.json': { icon: Braces, tone: 'oklch(82% 0.10 75)', bg: 'oklch(82% 0.10 75 / 0.12)' },
+		'pnpm-lock.yaml': { icon: FileType, tone: 'oklch(70% 0.16 295)', bg: 'oklch(70% 0.16 295 / 0.12)' },
+		'package-lock.json': { icon: FileType, tone: 'oklch(70% 0.16 295)', bg: 'oklch(70% 0.16 295 / 0.12)' },
+		'yarn.lock': { icon: FileType, tone: 'oklch(70% 0.16 295)', bg: 'oklch(70% 0.16 295 / 0.12)' },
+		'tsconfig.json': { icon: FileCog, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		'vite.config.ts': { icon: FileCog, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		'svelte.config.js': { icon: FileCog, tone: 'oklch(70% 0.16 18)', bg: 'oklch(70% 0.16 18 / 0.12)' },
+		'tailwind.config.js': { icon: FileCog, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		'favicon.svg': { icon: CodeXml, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		'.env': { icon: FileCog, tone: 'oklch(80% 0.14 75)', bg: 'oklch(80% 0.14 75 / 0.12)' }
+	};
 
-		const parts = lowerName.split('.');
-		const extension = parts.length > 1 ? parts.pop() || '' : '';
-		return EXTENSION_VISUALS[extension] || { icon: FileText, tone: 'text-muted-foreground/70', accent: 'bg-white/40 ring-white/30' };
+	const EXTENSION_VISUALS: Record<string, FileVisual> = {
+		js: { icon: FileCode, tone: 'oklch(80% 0.14 75)', bg: 'oklch(80% 0.14 75 / 0.12)' },
+		mjs: { icon: FileCode, tone: 'oklch(80% 0.14 75)', bg: 'oklch(80% 0.14 75 / 0.12)' },
+		cjs: { icon: FileCode, tone: 'oklch(80% 0.14 75)', bg: 'oklch(80% 0.14 75 / 0.12)' },
+		ts: { icon: FileCode, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		tsx: { icon: FileCode, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		jsx: { icon: FileCode, tone: 'oklch(82% 0.13 75)', bg: 'oklch(82% 0.13 75 / 0.12)' },
+		json: { icon: Braces, tone: 'oklch(82% 0.10 75)', bg: 'oklch(82% 0.10 75 / 0.12)' },
+		yaml: { icon: FileType, tone: 'oklch(74% 0.12 18)', bg: 'oklch(74% 0.12 18 / 0.12)' },
+		yml: { icon: FileType, tone: 'oklch(74% 0.12 18)', bg: 'oklch(74% 0.12 18 / 0.12)' },
+		html: { icon: CodeXml, tone: 'oklch(80% 0.14 75)', bg: 'oklch(80% 0.14 75 / 0.12)' },
+		css: { icon: FileType, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		scss: { icon: FileType, tone: 'oklch(78% 0.12 340)', bg: 'oklch(78% 0.12 340 / 0.12)' },
+		md: { icon: FileText, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		txt: { icon: FileText, tone: 'oklch(80% 0.04 280)', bg: 'oklch(80% 0.04 280 / 0.12)' },
+		java: { icon: Coffee, tone: 'oklch(70% 0.16 18)', bg: 'oklch(70% 0.16 18 / 0.12)' },
+		kt: { icon: FileCode, tone: 'oklch(70% 0.16 295)', bg: 'oklch(70% 0.16 295 / 0.12)' },
+		py: { icon: FileCode, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		go: { icon: FileCode, tone: 'oklch(78% 0.13 220)', bg: 'oklch(78% 0.13 220 / 0.12)' },
+		rs: { icon: FileCode, tone: 'oklch(70% 0.16 18)', bg: 'oklch(70% 0.16 18 / 0.12)' },
+		sh: { icon: FileTerminal, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		bash: { icon: FileTerminal, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		svg: { icon: CodeXml, tone: 'oklch(80% 0.14 75)', bg: 'oklch(80% 0.14 75 / 0.12)' },
+		png: { icon: Image, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		jpg: { icon: Image, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		jpeg: { icon: Image, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		gif: { icon: Image, tone: 'oklch(75% 0.14 150)', bg: 'oklch(75% 0.14 150 / 0.12)' },
+		xml: { icon: CodeXml, tone: 'oklch(80% 0.14 75)', bg: 'oklch(80% 0.14 75 / 0.12)' },
+		log: { icon: ScrollText, tone: 'oklch(80% 0.04 280)', bg: 'oklch(80% 0.04 280 / 0.12)' }
+	};
+
+	function getFileVisual(node: FileNode): FileVisual {
+		if (node.type === 'directory') {
+			return {
+				icon: expandedDirs.has(node.path) ? FolderOpen : Folder,
+				tone: 'oklch(80% 0.14 75)',
+				bg: 'oklch(80% 0.14 75 / 0.12)'
+			};
+		}
+		const lower = node.name.toLowerCase();
+		if (EXACT_VISUALS[lower]) return EXACT_VISUALS[lower];
+		const ext = lower.split('.').pop() || '';
+		return EXTENSION_VISUALS[ext] || {
+			icon: FileText,
+			tone: 'rgba(255,255,255,0.38)',
+			bg: 'rgba(255,255,255,0.06)'
+		};
 	}
 
 	function filterFiles(nodes: FileNode[], query: string): FileNode[] {
@@ -135,10 +131,8 @@
 			if (node.name.toLowerCase().includes(lower)) {
 				acc.push(node);
 			} else if (node.type === 'directory' && node.children) {
-				const filtered = filterFiles(node.children, query);
-				if (filtered.length > 0) {
-					acc.push({ ...node, children: filtered });
-				}
+				const filtered = filterFiles(node.children, lower);
+				if (filtered.length > 0) acc.push({ ...node, children: filtered });
 			}
 			return acc;
 		}, []);
@@ -148,100 +142,230 @@
 
 	function buildVisibleNodes(nodes: FileNode[], depth = 0): VisibleNode[] {
 		const rows: VisibleNode[] = [];
-
 		for (const node of nodes) {
 			const isExpanded = node.type === 'directory' && expandedDirs.has(node.path);
 			rows.push({ node, depth, isExpanded });
-
 			const shouldTraverse = node.type === 'directory' && node.children && node.children.length > 0;
 			const shouldShowChildren = shouldTraverse && (searchQuery.length > 0 || isExpanded);
-
 			if (shouldShowChildren && node.children) {
 				rows.push(...buildVisibleNodes(node.children, depth + 1));
 			}
 		}
-
 		return rows;
 	}
 
 	let visibleNodes = $derived(buildVisibleNodes(filteredFiles));
 </script>
 
-<div class="flex flex-col h-full bg-white/20">
-	<div class="px-4 py-4 border-b border-white/40">
-		<div class="mb-3 flex items-start justify-between gap-2">
-			<div>
-				<p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/55">Folder Layout</p>
-				<p class="mt-1 text-xs text-muted-foreground/60">Open folders to explore the workspace structure.</p>
-			</div>
-		</div>
-		<div class="relative">
-			<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/45" />
+<div class="file-tree">
+	<div class="tree-header">
+		<p class="eyebrow">Explorer</p>
+		<div class="search-wrap">
+			<Search class="search-icon" />
 			<input
 				type="text"
 				bind:value={searchQuery}
 				placeholder="Search files..."
-				class="w-full h-9 rounded-xl border border-white/40 bg-white/60 pl-9 pr-8 text-xs shadow-sm outline-none transition-colors placeholder:text-muted-foreground/35 focus:border-primary/30 focus:bg-white"
 			/>
 			{#if searchQuery}
-				<button
-					type="button"
-					onclick={() => searchQuery = ''}
-					class="absolute right-2.5 top-1/2 -translate-y-1/2"
-				>
-					<X class="h-3.5 w-3.5 text-muted-foreground/50 hover:text-muted-foreground" />
+				<button type="button" class="clear-btn" onclick={() => searchQuery = ''}>
+					<X class="h-3 w-3" />
 				</button>
 			{/if}
 		</div>
 	</div>
 
-	<div class="flex-1 overflow-auto px-2 py-3">
+	<div class="tree-scroll">
 		{#each visibleNodes as { node, depth, isExpanded } (node.path)}
-			{@const Icon = getFileIcon(node)}
-			{@const visual = getFileVisual(node)}
 			{@const isDir = node.type === 'directory'}
 			{@const isSelected = selectedPath === node.path}
-			{@const hasChildren = Boolean(node.children && node.children.length > 0)}
+			{@const visual = getFileVisual(node)}
+			{@const Icon = visual.icon}
 
-				<div
-					role="treeitem"
-					tabindex="-1"
-					aria-selected={isSelected}
-					class="tree-node min-w-max"
-					style="padding-left: {depth * 14}px"
+			<div class="tree-row" style="padding-left: {depth * 14 + 8}px">
+				<button
+					type="button"
+					class="tree-node {isSelected ? 'active' : ''}"
+					onclick={() => isDir ? toggleDir(node.path) : onFileSelect(node.path)}
 				>
-					<button
-						type="button"
-						class="inline-flex w-max min-w-max items-center gap-2 rounded-lg px-2 py-2 text-xs whitespace-nowrap transition-colors hover:bg-white/50 {isSelected ? 'bg-primary/10 text-primary ring-1 ring-primary/20' : 'text-foreground/78'}"
-						onclick={() => isDir ? toggleDir(node.path) : onFileSelect(node.path)}
-					>
 					{#if isDir}
-						<span class="w-4 flex items-center justify-center shrink-0">
+						<span class="chevron">
 							{#if isExpanded}
-								<ChevronDown class="h-3 w-3 text-muted-foreground/50" />
+								<ChevronDown class="h-3 w-3" />
 							{:else}
-								<ChevronRight class="h-3 w-3 text-muted-foreground/50" />
+								<ChevronRight class="h-3 w-3" />
 							{/if}
 						</span>
-					{:else if hasChildren}
-						<span class="w-4"></span>
 					{:else}
-						<span class="w-4"></span>
+						<span class="chevron-placeholder"></span>
 					{/if}
 
-					<span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-md ring-1 {isDir ? 'bg-amber-500/10 ring-amber-500/15' : visual.accent}">
-						<Icon class="h-3.5 w-3.5 {isDir ? 'text-amber-500/85' : visual.tone}"></Icon>
+					<span class="file-icon" style="background: {visual.bg}; color: {visual.tone};">
+						<Icon class="h-3.5 w-3.5" />
 					</span>
-
-					<span class="font-medium">{node.name}</span>
+					<span class="label">{node.name}</span>
 				</button>
 			</div>
 		{/each}
 
 		{#if visibleNodes.length === 0}
-			<div class="px-3 py-6 text-center text-xs text-muted-foreground/50">
-				{searchQuery ? 'No files match your search' : 'No files in workspace'}
-			</div>
+			<div class="empty">{searchQuery ? 'No files match' : 'No files'}</div>
 		{/if}
 	</div>
 </div>
+
+<style>
+	.file-tree {
+		display: flex;
+		flex-direction: column;
+		height: 100%;
+		font-family: var(--font-mono);
+		font-size: 11.5px;
+		color: rgba(255,255,255,0.55);
+	}
+
+	.tree-header {
+		padding: 12px 12px 10px;
+		border-bottom: 1px solid rgba(255,255,255,0.06);
+		flex-shrink: 0;
+	}
+
+	.eyebrow {
+		margin: 0 0 8px;
+		font-size: 10px;
+		font-weight: 500;
+		letter-spacing: 0.14em;
+		text-transform: uppercase;
+		color: rgba(255,255,255,0.40);
+	}
+
+	.search-wrap {
+		position: relative;
+	}
+	.search-wrap :global(.search-icon) {
+		position: absolute;
+		left: 8px;
+		top: 50%;
+		transform: translateY(-50%);
+		width: 12px;
+		height: 12px;
+		color: rgba(255,255,255,0.30);
+		pointer-events: none;
+	}
+	.search-wrap input {
+		width: 100%;
+		height: 28px;
+		border-radius: 7px;
+		border: 1px solid rgba(255,255,255,0.08);
+		background: rgba(255,255,255,0.04);
+		padding: 0 22px 0 24px;
+		font-family: inherit;
+		font-size: 11px;
+		color: rgba(255,255,255,0.70);
+		outline: none;
+		transition: border-color 150ms ease, background 150ms ease;
+	}
+	.search-wrap input::placeholder {
+		color: rgba(255,255,255,0.25);
+	}
+	.search-wrap input:focus {
+		border-color: rgba(167,139,250,0.35);
+		background: rgba(255,255,255,0.06);
+	}
+	.clear-btn {
+		position: absolute;
+		right: 6px;
+		top: 50%;
+		transform: translateY(-50%);
+		background: none;
+		border: none;
+		padding: 2px;
+		color: rgba(255,255,255,0.35);
+		cursor: pointer;
+		line-height: 0;
+	}
+	.clear-btn:hover { color: rgba(255,255,255,0.60); }
+
+	.tree-scroll {
+		flex: 1;
+		overflow-y: auto;
+		overflow-x: hidden;
+		padding: 6px 6px 12px;
+	}
+	.tree-scroll::-webkit-scrollbar { width: 4px; }
+	.tree-scroll::-webkit-scrollbar-thumb {
+		background: rgba(255,255,255,0.08);
+		border-radius: 4px;
+	}
+
+	.tree-row {
+		display: flex;
+		align-items: center;
+	}
+
+	.tree-node {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 3px 7px;
+		border-radius: 6px;
+		white-space: nowrap;
+		cursor: pointer;
+		background: none;
+		border: none;
+		font-family: inherit;
+		font-size: inherit;
+		color: inherit;
+		width: 100%;
+		text-align: left;
+		transition: background 120ms ease;
+	}
+	.tree-node:hover {
+		background: rgba(255,255,255,0.04);
+	}
+	.tree-node.active {
+		background: rgba(167,139,250,0.10);
+		color: white;
+	}
+	.tree-node.active .file-icon {
+		box-shadow: 0 0 0 1px rgba(167,139,250,0.28), 0 0 10px rgba(167,139,250,0.16);
+	}
+
+	.chevron {
+		width: 14px;
+		height: 14px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		color: rgba(255,255,255,0.30);
+	}
+	.chevron-placeholder {
+		width: 14px;
+		flex-shrink: 0;
+	}
+
+	.file-icon {
+		width: 20px;
+		height: 20px;
+		border-radius: 5px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		flex-shrink: 0;
+		transition: box-shadow 150ms ease, color 150ms ease, background 150ms ease;
+	}
+
+	.label {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.empty {
+		padding: 24px 8px;
+		text-align: center;
+		color: rgba(255,255,255,0.25);
+		font-size: 11px;
+	}
+</style>
